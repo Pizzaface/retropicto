@@ -1,0 +1,2 @@
+# Preserve the historical joiner/discovery FreeRTOS tick.
+CONFIG_FREERTOS_HZ=100

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retropicto"
+version = "0.1.0"
+description = "RetroPicto portable Nintendo DS PictoChat protocol and capture tools"
+readme = "README.md"
+urls = { Homepage = "https://retropic.to" }
+requires-python = ">=3.10"
+
+[project.scripts]
+pictochat-analyze = "pictochat.cli.analyze:main"
+pictochat-render = "pictochat.cli.render_canvas:main"
+pictochat-export = "pictochat.cli.export_drawings:main"
+pictochat-serial = "pictochat.cli.analyze_serial_drawings:main"
+retropicto-analyze = "pictochat.cli.analyze:main"
+retropicto-render = "pictochat.cli.render_canvas:main"
+retropicto-export = "pictochat.cli.export_drawings:main"
+retropicto-serial = "pictochat.cli.analyze_serial_drawings:main"
+
+[tool.setuptools.packages.find]
+where = ["python"]

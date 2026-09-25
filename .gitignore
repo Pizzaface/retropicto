@@ -1,0 +1,27 @@
+# Generated build, package, editor and capture output. Prebuilt release images
+# under firmware/prebuilt are intentional distribution inputs and remain tracked.
+.pio/
+.platformio-core/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*.exe
+*.log
+*.pcap
+!tests/fixtures/*.pcap
+/captures_out/
+/sdkconfig.*
+!/sdkconfig.defaults
+/.vscode/
+compile_commands.json
+
+/wifi.local.json
+
+/firmware/esp32/wifi_credentials.h
+
+/relay.local.json
+/.env.local
+.venv/
+venv/

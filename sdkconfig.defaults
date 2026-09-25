@@ -1,0 +1,21 @@
+# Project defaults. Run `idf.py fullclean` if you change these after a first build.
+
+# Give the WiFi/promiscuous path headroom and a decent RX buffer pool.
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
+
+# A roomier main task stack — we build packet buffers on the WiFi callback path.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# 1 kHz tick so MODE_HOST can drive the CMD/REPLY TDMA poll loop at a tight,
+# regular cadence (a real DS MP host polls every ~1-3 ms; at the default 100 Hz
+# tick our polls were ~78/s and the DS supervision-timed-out after ~1 s).
+CONFIG_FREERTOS_HZ=1000
+
+# Faster serial for the discovery-mode frame log.
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# Note: Nintendo DS local wireless can land on channels 12/13, which are legal
+# only in some regions. If your DSs use them, call esp_wifi_set_country() in the
+# firmware to a region that permits them — it is a runtime setting, not Kconfig.
