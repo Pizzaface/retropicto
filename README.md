@@ -21,7 +21,7 @@ experimental; compile-checking them does not prove radio interoperability.
 2. Open a terminal in this repository and make an environment:
 
    ```powershell
-   py -m venv .venv
+   python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    python -m pip install --upgrade pip esptool
    ```

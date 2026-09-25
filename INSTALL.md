@@ -14,7 +14,7 @@ the BLE gateway dependencies:
 
 ```powershell
 cd retropicto
-py -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip esptool
 python -m pip install -r tools/requirements-ble.txt
