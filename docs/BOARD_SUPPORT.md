@@ -27,6 +27,14 @@ with 4 MiB flash, rebuild using its own board profile even though the applicatio
 partition itself fits within 2 MiB. Chip family alone is not enough to choose a
 prebuilt image.
 
+The current PlatformIO C6 build also prints the SDK warning `Expected 8MB,
+found 2MB` because the app's SDK default still says 2 MiB. The selected C6 board
+profile reports 8 MiB, and `esptool image-info` confirms the generated C6
+application header is 8 MiB, DIO, 80 MHz. This warning refers to the SDK
+setting; it is not a flash-capacity probe. The flashing helper checks the
+connected board's detected capacity before writing. Keep the 8 MiB board
+profile for these prebuilt images.
+
 Install Python and esptool, close serial monitors, and run from the repository
 root. For C6 side A, for example:
 
