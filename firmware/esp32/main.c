@@ -110,7 +110,10 @@ static const uint8_t GHOST_MAC[6] = {0x00,0x09,0xbf,0xc6,0xc6,0xc7};
 #define HOST_CHATROOM (online_node()-1)
 
 #else
+#ifndef HOST_CHATROOM
 #define HOST_CHATROOM  1        // 0..3 = rooms A..D (perfect01 host used B=1)
+#endif
+_Static_assert(HOST_CHATROOM >= 0 && HOST_CHATROOM <= 3, "Room must be A..D (0..3)");
 #endif
 #define JOIN_RETRY_MS   700        // resend Auth-Req if no progress within this
 #define ASSOC_RESEND_MAX 3         // resend Assoc-Req this many times before re-auth
@@ -125,7 +128,9 @@ static const uint8_t GHOST_MAC[6] = {0x00,0x09,0xbf,0xc6,0xc6,0xc7};
 
 // The channel to capture + stream on. Set this to whatever MODE_DISCOVERY told
 // you your DSs are using. SoftAP and capture both use it.
+#ifndef CAPTURE_CHANNEL
 #define CAPTURE_CHANNEL 7
+#endif
 
 // UDP: frames are broadcast to <softap-subnet>.255 : UDP_PORT.
 #define UDP_PORT       5555
@@ -144,6 +149,16 @@ _Static_assert(sizeof(host_profile_bio) / sizeof(host_profile_bio[0]) - 1 <=
                HOST_PROFILE_BIO_UNITS, "Bio exceeds 26 UTF-16 code units");
 
 static const char *TAG = "pictochat";
+
+#if SNIFFER_MODE == MODE_HOST
+static void host_log_heap(const char *stage) {
+    multi_heap_info_t info;
+    heap_caps_get_info(&info, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "HEAP stage=%s internal_free=%u internal_min=%u internal_largest=%u",
+             stage, (unsigned)info.total_free_bytes,
+             (unsigned)info.minimum_free_bytes, (unsigned)info.largest_free_block);
+}
+#endif
 
 // ---- 802.11 header field offsets (little bits of layout we rely on) ----
 #define WLAN_FC_OFFSET   0   // frame control (2 bytes)
@@ -587,6 +602,9 @@ static uint32_t s_generation;
 static unsigned s_cycle_slot;
 static uint32_t s_cycle_generation;
 static bool s_cycle_open;
+static int64_t s_cycle_started_us; // admission lock; software submission time
+static atomic_uint s_reply_closed, s_reply_other, s_reply_invalid;
+static atomic_int s_reply_rssi, s_reply_noise, s_reply_delay_us;
 static volatile bool     s_host_beaconing = false; // arm the beacon SSID-delete surgery
 static volatile uint32_t s_rx_replies = 0;         // client REPLYs we've seen
 static volatile uint32_t s_cmds_tx = 0;
@@ -720,6 +738,7 @@ static inline void host_tx(const uint8_t *b, size_t n) {
         s_cmd_granted = n >= 28 && (b[26] || b[27]);
         portENTER_CRITICAL(&s_admission_lock);
         s_cycle_open = s_cmd_granted;
+        s_cycle_started_us = esp_timer_get_time();
         portEXIT_CRITICAL(&s_admission_lock);
     }
     host_trace('S', b, n, 255, 0);
@@ -911,6 +930,7 @@ static void host_wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *da
     );
     atomic_store_explicit(&s_host_trace_left, 64, memory_order_relaxed);
     ESP_LOGI(TAG, "HOST: %s clients=%u", joining ? (accepted ? "joined" : "rejected") : "left", count);
+    host_log_heap(joining ? "association" : "leave");
 }
 #endif
 
@@ -988,14 +1008,24 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
         // Client REPLY to our CMD poll (data to REPLY multicast).
         if (fc_type(f) == 2 && len >= 24 &&
             memcmp(f + WLAN_ADDR3_OFF, MP_REPLY_MCAST, 6) == 0) {
-            if (mp_reply_payload_bytes(f, (size_t)len, HOST_SELF_MAC) < 0) return;
+            if (mp_reply_payload_bytes(f, (size_t)len, HOST_SELF_MAC) < 0) {
+                atomic_fetch_add_explicit(&s_reply_invalid, 1, memory_order_relaxed);
+                return;
+            }
             // Only the selected MAC and association generation may close this
             // cycle. A different room member's reply cannot acknowledge delivery.
             portENTER_CRITICAL(&s_admission_lock);
             unsigned slot = s_cycle_slot;
             host_station_t *station = &s_stations[slot];
-            bool our_client = s_cycle_open && station->connected &&
+            bool selected_client = station->connected &&
                 station->generation == s_cycle_generation && !memcmp(f + 10, station->mac, 6);
+            bool our_client = s_cycle_open && selected_client;
+            if (selected_client) {
+                atomic_store_explicit(&s_reply_rssi, pkt->rx_ctrl.rssi, memory_order_relaxed);
+                atomic_store_explicit(&s_reply_noise, pkt->rx_ctrl.noise_floor, memory_order_relaxed);
+                atomic_store_explicit(&s_reply_delay_us,
+                    (int)(esp_timer_get_time() - s_cycle_started_us), memory_order_relaxed);
+            }
             uint32_t generation = station->generation;
             bool send_ack = false;
             if (our_client) {
@@ -1005,7 +1035,11 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
                 s_cycle_open = false;
             }
             portEXIT_CRITICAL(&s_admission_lock);
-            if (!our_client) return;
+            if (!our_client) {
+                atomic_fetch_add_explicit(selected_client ? &s_reply_closed : &s_reply_other,
+                                          1, memory_order_relaxed);
+                return;
+            }
             s_rx_replies++;
             host_trace('R', f, (size_t)len - 4, 255, 0);
             if (send_ack) { host_send_ack(); s_reply_acks++; }
@@ -1301,6 +1335,9 @@ static void heartbeat_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(5000));
         ESP_LOGI(TAG, "alive — %lu Nintendo frames seen so far",
                  (unsigned long)s_seen);
+#if SNIFFER_MODE == MODE_HOST
+        host_log_heap("periodic");
+#endif
 #if SNIFFER_MODE == MODE_SERIAL_MGMT
         ESP_LOGI(TAG, "USB MP totals: host_cmd=%lu reply_empty=%lu reply_data=%lu payload_bytes=%lu",
                  (unsigned long)s_usb_host_cmds, (unsigned long)s_usb_empty_replies,
@@ -1490,12 +1527,18 @@ static void host_room_event(void *context, const pictochat_event_t *event) {
             if (xQueueSend(s_drawing_ready, &drawing, 0) != pdTRUE) {
                 free(drawing); ++s_drawing_drops;
             }
-        } else ++s_drawing_drops;
+        } else {
+            ++s_drawing_drops;
+            ESP_LOGE(TAG, "DRAW allocation failed bytes=%u",
+                     (unsigned)(sizeof(*drawing) + event->length));
+        }
+        host_log_heap("drawing_received");
         ESP_LOGI(TAG, "DRAW received=%lu aid=%u len=%u hash=%08lx drops=%lu",
             (unsigned long)s_drawings_received, event->aid, (unsigned)event->length,
             (unsigned long)host_message_hash(event->body, event->length),
             (unsigned long)s_drawing_drops);
     } else if (event->type == PICTOCHAT_MESSAGE_SENT) {
+        host_log_heap("drawing_sent");
         ++s_drawings_sent;
         ESP_LOGI(TAG, "DRAW outbound TX complete aid=%u sender=%u count=%lu bytes=%u hash=%08lx",
             event->aid, event->sender_slot, (unsigned long)s_drawings_sent,
@@ -1725,6 +1768,14 @@ static void host_task(void *arg) {
                      atomic_load_explicit(&s_done_fail, memory_order_relaxed),
                      atomic_load_explicit(&s_submit_fail, memory_order_relaxed),
                      atomic_load_explicit(&s_host_trace_drops, memory_order_relaxed));
+            // Diagnostic software timing, not calibrated over-the-air latency.
+            ESP_LOGI(TAG, "RADIO DIAG: closed=%u other=%u invalid=%u last_rssi=%d noise=%d reply_after_submit_us=%d",
+                     atomic_load_explicit(&s_reply_closed, memory_order_relaxed),
+                     atomic_load_explicit(&s_reply_other, memory_order_relaxed),
+                     atomic_load_explicit(&s_reply_invalid, memory_order_relaxed),
+                     atomic_load_explicit(&s_reply_rssi, memory_order_relaxed),
+                     atomic_load_explicit(&s_reply_noise, memory_order_relaxed),
+                     atomic_load_explicit(&s_reply_delay_us, memory_order_relaxed));
             last_cmds = s_cmds_tx;
             next_stat = now + 1000000;
         }
@@ -1947,4 +1998,7 @@ void app_main(void) {
 #endif
 
     xTaskCreate(heartbeat_task, "heartbeat", 2048, NULL, 3, NULL);
+#if SNIFFER_MODE == MODE_HOST
+    host_log_heap("startup");
+#endif
 }

@@ -51,6 +51,61 @@ SoftAP, and use `tools/udp_to_wireshark.py` to receive the PCAP stream. The opti
 `tools/pictochat.lua` dissector provides Nintendo framing in Wireshark. See each
 tool's `--help` for output/interface options.
 
+## A–D drawing-echo trials
+
+`echo_a`, `echo_b`, `echo_c`, and `echo_d` run the existing standalone PICTOBOT
+with room IDs 0–3. A uses radio channel 1 and B uses channel 7, the
+hardware-confirmed pairs. A on channel 7 was invisible to the DS (see
+[historical trials](WIFI_BRIDGE.md#superseded-bench-path)). C/channel 13 was
+hardware-confirmed on September 28: a 10,276-byte drawing echoed correctly and
+Send re-enabled, with a paired passive WROOM capture. D/channel 7 was also
+user-confirmed on September 28: drawing echo displayed and Send re-enabled,
+without a power cycle after the final flash. All four trials retain 2 Mbps long
+preamble. Do not assume arbitrary room/channel pairs work.
+
+An intermittent failure remains unresolved: on both B and D, the host reported
+CMD completions while the WROOM saw ACKs but no CMD polls or DS replies. B
+recovered after USB power cycling; D later recovered after reflash without a
+power cycle. Successful room trials do not establish reliable startup or a
+root-cause fix. These targets use the pinned multihop SDK platform.
+
+```sh
+pio run -e echo_a -t upload --upload-port /dev/cu.usbmodem1101
+```
+
+Use the connected board's actual port. For each target, join the matching room
+on a DS, wait for Send, send a drawing, and confirm the PICTOBOT echo appears
+and Send becomes available again. Leave the room before flashing the next
+image. Record serial logs and DS observations separately: a successful build
+or `DRAW outbound TX complete` alone does not prove the echo displayed.
+
+### Independent WROOM witness
+
+`sniffer_b` builds the existing passive serial-management sniffer for ESP32-WROOM
+on channel 7, using the pinned SDK. It does not advertise a room. Flash it to the
+WROOM's actual port, not the C6's, and start both serial recordings **before**
+joining B so the sniffer sees the association that arms its bounded MP trace.
+
+```sh
+pio run -e sniffer_b -t upload --upload-port /dev/cu.usbserial-0001
+pio run -e echo_b -t upload --upload-port /dev/cu.usbmodem21201
+```
+
+Those are example hub ports; verify chip identities before flashing. The sniffer
+captures the first 64 MP frames per association plus a bounded host-application
+window. Check capture drops and repeated `rx_us` values before using timings;
+PC timestamps and serial-log prefixes are not over-the-air timing evidence.
+
+## Runtime heap measurements
+
+Host builds log `HEAP stage=...` at startup, association/leave, standalone drawing
+receipt, outbound completion, and every five seconds. Values are bytes of
+internal, byte-addressable heap: `internal_free`, `internal_min` (allocator
+low-water marks), and `internal_largest` (largest available block). Drawing
+allocation failures also log the requested size. Compare idle, joined, and
+repeated drawing transfers; static RAM usage alone excludes runtime Wi-Fi,
+queue, stack, and drawing allocations. These are diagnostics, not a RAM fix.
+
 ## Regression workflow
 
 Run native C/Python tests first as described in the root README. Compile the host
