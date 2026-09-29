@@ -67,6 +67,8 @@ static int ble_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *c
     }
     return 0;
 }
+/* ESP-IDF's bleprph example declares this initializer explicitly. */
+void ble_store_config_init(void);
 static const struct ble_gatt_svc_def ble_services[]={
     {.type=BLE_GATT_SVC_TYPE_PRIMARY,.uuid=&svc_uuid.u,.characteristics=(struct ble_gatt_chr_def[]){
         {.uuid=&rx_uuid.u,.access_cb=ble_access,.flags=BLE_GATT_CHR_F_WRITE|BLE_GATT_CHR_F_WRITE_NO_RSP},
@@ -115,9 +117,9 @@ static void ble_sync(void) {
     rc=ble_hs_id_infer_auto(0,&own_addr_type); configASSERT(!rc); ble_advertise();
 }
 static void ble_host(void *arg) { (void)arg; nimble_port_run(); nimble_port_freertos_deinit(); }
-static bool ble_packet(unsigned kind,uint32_t seq,const uint8_t *payload,size_t n) {
-    if (!atomic_load(&ble_subscribed) || !relay_header(ble_tx_wire,kind,seq,payload,n)) return false;
-    memcpy(ble_tx_wire+RELAY_HEADER,payload,n); size_t total=RELAY_HEADER+n;
+static bool ble_send(unsigned kind,uint32_t seq,unsigned from,unsigned to,const uint8_t *payload,size_t n) {
+    if (!atomic_load(&ble_subscribed) || !relay_header(ble_tx_wire,kind,seq,from,to,payload,n)) return false;
+    if (n) memcpy(ble_tx_wire+RELAY_HEADER,payload,n); size_t total=RELAY_HEADER+n;
     unsigned revision=atomic_load(&ble_revision), conn=atomic_load(&ble_connection);
     uint16_t mtu=ble_att_mtu(conn); if (mtu<23) return false;
     size_t chunk=mtu-7; if(chunk>240) chunk=240;
@@ -132,47 +134,24 @@ static bool ble_packet(unsigned kind,uint32_t seq,const uint8_t *payload,size_t 
     }
     return true;
 }
-#include "ble_receive.inc"
 static void ble_transport_task(void *arg) {
     (void)arg;
-    int64_t last_rx=0,last_state=0,last_draw=0;
-    uint32_t epoch=0,sent_seq=0,revision=atomic_load(&ble_revision);
-    state_t sent_state={0};
+    int64_t last_rx=0;
+    unsigned revision=atomic_load(&ble_revision);
     for(;;) {
+        int64_t now=esp_timer_get_time();
         if(revision!=atomic_load(&ble_revision)) {
-            revision=atomic_load(&ble_revision); last_rx=last_state=0; sent_seq=0;
-            portENTER_CRITICAL(&lock); link_up=false; portEXIT_CRITICAL(&lock);
+            revision=atomic_load(&ble_revision); last_rx=0;
+            relay_forget_all(); relay_transmit(ble_send,now,false);
             ble_packet_t *old; while(xQueueReceive(ble_packets,&old,0)==pdTRUE) free(old);
         }
         ble_packet_t *packet;
         while(xQueueReceive(ble_packets,&packet,0)==pdTRUE) {
-            ble_receive(packet->bytes,packet->length,&last_rx,&epoch); free(packet);
+            if(relay_receive(packet->bytes,packet->length,1,now)) last_rx=now;
+            free(packet);
         }
-        int64_t now=esp_timer_get_time();
-        if(last_rx && now-last_rx>6000000) {
-            portENTER_CRITICAL(&lock); link_up=false; portEXIT_CRITICAL(&lock); last_rx=0;
-            ESP_LOGW(TAG,"BLE peer timed out");
-        }
-        portENTER_CRITICAL(&lock); state_t state=local_state; portEXIT_CRITICAL(&lock);
-        if(atomic_load(&ble_subscribed) && (memcmp(&state,&sent_state,sizeof(state)) || now-last_state>1000000)) {
-            uint8_t data[92]; relay_put32(data,state.boot); relay_put32(data+4,state.generation); memcpy(data+8,state.profile,84);
-            if(ble_packet(RELAY_STATE,0,data,sizeof(data))) { sent_state=state; last_state=now; }
-        }
-        ack_t ack;
-        while(xQueueReceive(acknowledgments,&ack,0)==pdTRUE) if(ack.epoch==epoch) {
-            uint8_t data[8]; relay_put32(data,ack.boot); relay_put32(data+4,ack.seq); ble_packet(RELAY_ACK,ack.seq,data,8);
-        }
-        drawing_t *pending;
-        if(xQueuePeek(outgoing,&pending,0)==pdTRUE) {
-            if(!state.generation || relay_get32(pending->payload+4)!=state.generation) {
-                xQueueReceive(outgoing,&pending,0); free(pending); sent_seq=0;
-            } else if(last_rx && (pending->seq!=sent_seq || now-last_draw>12000000)) {
-                if(ble_packet(RELAY_DRAWING,pending->seq,pending->payload,pending->len)) {
-                    sent_seq=pending->seq; last_draw=now;
-                    ESP_LOGI(TAG,"BLE drawing sent seq=%lu",(unsigned long)sent_seq);
-                }
-            }
-        }
+        if(last_rx && now-last_rx>PEER_TIMEOUT_US) { last_rx=0; relay_forget_all(); ESP_LOGW(TAG,"BLE peer timed out"); }
+        if(atomic_load(&ble_subscribed)) relay_transmit(ble_send,now,true);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -187,6 +166,12 @@ static void ble_start(void) {
     configASSERT(xTaskCreate(ble_log_task,"ble_logs",3072,NULL,1,NULL)==pdPASS);
     ESP_ERROR_CHECK(nimble_port_init());
     ble_hs_cfg.sync_cb=ble_sync;
+    ble_hs_cfg.sm_bonding=1;
+    ble_hs_cfg.sm_sc=1;
+    ble_hs_cfg.sm_io_cap=BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_our_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
+    ble_store_config_init();
     ble_svc_gap_init(); ble_svc_gatt_init();
     int rc=ble_gatts_count_cfg(ble_services); configASSERT(!rc);
     rc=ble_gatts_add_svcs(ble_services); configASSERT(!rc);

@@ -11,8 +11,10 @@ working channel. No Wi-Fi credentials or router configuration are needed.
 
 The common `esp32c6usb` image selects A/B from the two bench boards' factory
 MACs in `online_wifi_configure()`. Unknown boards refuse startup. This mapping
-must be changed for replacement hardware; see the [board assignment instructions](../README.md#1-assign-your-boards-before-flashing). Each board admits one physical DS;
-the remote DS is installed as a virtual participant using its actual profile.
+must be changed for replacement hardware; see the [board assignment instructions](../README.md#1-assign-your-boards-before-flashing). Each board admits
+`ONLINE_LOCAL_SLOTS` physical DS consoles; every remote DS is installed as a
+virtual participant (ghost) using its actual profile, one ghost slot per remote
+peer id, AIDs assigned downward from 15.
 The local echo bot is disabled. Drawing attribution is rewritten by the existing
 ghost API, without changing the bitmap. USB code reuses the online bridge's room
 ownership, bounded queues, generation checks, and duplicate suppression.
@@ -65,8 +67,16 @@ restart the tool after reconnecting. It does not reconnect automatically.
 
 ## Framing and radio isolation
 
-Wire packets use the existing 16-byte PCTR header, FNV-1a payload checksum, and
-bounded state/drawing/ACK payloads. USB carries one hex-encoded packet per line
+Wire packets use the 20-byte PCTR **v2** header (`PCTR`, version 2, kind,
+uint16 length, uint32 sequence, uint32 FNV-1a payload checksum, uint16 `from`,
+uint16 `to`) and bounded state/drawing/ACK/leave payloads. Board→bridge, `from`
+is the local DS slot and `to` is a remote peer id or 0 for all. Bridge→board,
+`from` is a nonzero peer id the bridge assigns per remote participant and `to`
+is a local slot or 0. `leave` (kind 4, empty) removes a peer immediately;
+otherwise a peer expires six seconds after its last state heartbeat. A drawing
+is retried every four seconds until every live peer has ACKed it, and dropped
+after 30 seconds. `usb_bridge.py` is single-peer: it stamps the far board as
+peer 1. USB carries one hex-encoded packet per line
 prefixed `@PCTR `. Diagnostic lines are logged locally, never forwarded. Both
 parsers bound input size and reject invalid framing. A leading newline permits
 resynchronization after an interrupted write. Checksums detect corruption; they
@@ -76,7 +86,9 @@ The native USB Serial/JTAG driver handles USB input/output. A low-priority task
 owns serial writes and reads, with a separate bounded log queue so verbose radio
 logs cannot block protocol timing. Firmware log rows may be truncated/dropped
 under load. Drawing queues are bounded (two outgoing, one incoming), and retries
-use the same sequence number. Incoming state heartbeats refresh peer liveness.
+use the same sequence number. Each room slot costs about 24 KB of static RAM
+(`PICTOCHAT_ROOM_CLIENTS`, set per environment in `platformio.ini`); the C6 ceiling
+for local consoles plus ghosts must be found on hardware. Incoming state heartbeats refresh peer liveness.
 Room mutation happens only in the existing radio-owner task.
 
 The old `wifi.local.json` diagnostic settings do not affect this environment.

@@ -4,7 +4,7 @@ from usb_bridge import decode, PREFIX
 SERVICE = '50494354-0000-0080-5049-505100000001'
 RX = '50494354-0000-0080-5049-505100000002'
 TX = '50494354-0000-0080-5049-505100000003'
-MAX_PACKET = 10320
+MAX_PACKET = 10324
 
 def valid_packet(data):
     return decode(PREFIX + bytes(data).hex().encode()) is not None
@@ -30,7 +30,7 @@ class Assembly:
         offset, total = struct.unpack_from('<HH', fragment)
         if offset == 0:
             self.data.clear(); self.total = total
-        if not 16 <= total <= MAX_PACKET or total != self.total or offset != len(self.data) or offset + len(fragment) - 4 > total:
+        if not 20 <= total <= MAX_PACKET or total != self.total or offset != len(self.data) or offset + len(fragment) - 4 > total:
             self.data.clear(); self.total = 0
             return None
         self.data.extend(fragment[4:])

@@ -14,7 +14,8 @@ import threading
 import time
 
 MAX_PAYLOAD = 10304
-MAX_LINE = 6 + 2 * (16 + MAX_PAYLOAD)
+HEADER = 20  # PCTR v2: magic, version, kind, len16, seq32, hash32, from16, to16
+MAX_LINE = 6 + 2 * (HEADER + MAX_PAYLOAD)
 PREFIX = b'@PCTR '
 
 
@@ -26,12 +27,12 @@ def checksum(data):
 
 
 def valid_length(kind, size):
-    return ((kind == 1 and size == 92) or (kind == 3 and size == 8) or
+    return ((kind == 1 and size == 92) or (kind == 3 and size == 8) or (kind == 4 and size == 0) or
             (kind == 2 and 1088 <= size <= MAX_PAYLOAD and (size - 64) % 1024 == 0))
 
 
 def decode(line):
-    """Return (kind, sequence, payload) only for a complete, valid wire frame."""
+    """Return (kind, sequence, payload, sender, recipient) only for a complete, valid frame."""
     line = line.rstrip(b'\r\n')
     if not line.startswith(PREFIX) or len(line) > MAX_LINE:
         return None
@@ -39,21 +40,21 @@ def decode(line):
     if len(encoded) % 2 or any(c not in b'0123456789abcdefABCDEF' for c in encoded):
         return None
     raw = bytes.fromhex(encoded.decode('ascii'))
-    if len(raw) < 16:
+    if len(raw) < HEADER:
         return None
-    magic, version, kind, size, seq, digest = struct.unpack('<4sBBHII', raw[:16])
-    body = raw[16:]
-    if magic != b'PCTR' or version != 1 or not valid_length(kind, size):
+    magic, version, kind, size, seq, digest, sender, recipient = struct.unpack('<4sBBHIIHH', raw[:HEADER])
+    body = raw[HEADER:]
+    if magic != b'PCTR' or version != 2 or not valid_length(kind, size):
         return None
     if len(body) != size or checksum(body) != digest:
         return None
-    return kind, seq, body
+    return kind, seq, body, sender, recipient
 
 
-def encode(kind, seq, body):
+def encode(kind, seq, body, sender=0, recipient=0):
     if not valid_length(kind, len(body)):
         raise ValueError('Invalid relay payload length')
-    header = struct.pack('<4sBBHII', b'PCTR', 1, kind, len(body), seq, checksum(body))
+    header = struct.pack('<4sBBHIIHH', b'PCTR', 2, kind, len(body), seq, checksum(body), sender, recipient)
     return PREFIX + (header + body).hex().encode('ascii') + b'\n'
 
 
@@ -156,8 +157,8 @@ def pump(source, destination, stop, report, errors):
                     if line and not line.startswith(PREFIX):
                         report(source.name, line.decode('utf-8', errors='replace'), False)
                     continue
-                destination.send(encode(*packet))
-                kind, seq, body = packet
+                kind, seq, body, _sender, _recipient = packet
+                destination.send(encode(kind, seq, body, sender=1))
                 if kind != 1 or body != last_state:
                     report(source.name, f'FORWARD kind={kind} seq={seq} bytes={len(body)}', True)
                     if kind == 1:

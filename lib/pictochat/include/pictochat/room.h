@@ -4,7 +4,9 @@
 
 /* Single owner, no allocation or I/O. One outstanding radio cycle per room.
  * Storage slots are independent of Wi-Fi AIDs (1..15). Keep off MCU stacks. */
+#ifndef PICTOCHAT_ROOM_CLIENTS
 #define PICTOCHAT_ROOM_CLIENTS 4u
+#endif
 typedef struct {
     bool connected, admitted, ghost;
     uint8_t mac[6], aid;
