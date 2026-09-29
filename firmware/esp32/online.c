@@ -112,22 +112,29 @@ void online_wifi_configure(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,NULL));
 }
 #else
+#include "nvs.h"
+/* DS room letter A..D (node 1..4). Saved by the bridge over USB ("@ROOM X"); a
+ * saved value wins over the build's PICTOCHAT_NODE. Channels are the
+ * hardware-confirmed ones per room. */
+static const uint8_t room_channel[4]={1,7,13,7};
+bool online_room_save(unsigned room) {
+    if (room<1 || room>4) return false;
+    nvs_handle_t h; if (nvs_open("picto",NVS_READWRITE,&h)!=ESP_OK) return false;
+    bool ok=nvs_set_u8(h,"room",(uint8_t)room)==ESP_OK && nvs_commit(h)==ESP_OK;
+    nvs_close(h); return ok;
+}
 void online_wifi_configure(void) {
+    nvs_handle_t h; uint8_t saved=0;
+    if (nvs_open("picto",NVS_READONLY,&h)==ESP_OK) { nvs_get_u8(h,"room",&saved); nvs_close(h); }
+    if (saved>=1 && saved<=4) node=saved;
+    else {
 #if defined(PICTOCHAT_NODE)
-#if PICTOCHAT_NODE != 1 && PICTOCHAT_NODE != 2
-#error "PICTOCHAT_NODE must be 1 (A) or 2 (B)"
-#endif
-    node=PICTOCHAT_NODE;
+        node=PICTOCHAT_NODE;
 #else
-    static const uint8_t mac_a[6]={0xcc,0x8d,0xa2,0xf2,0xc7,0x94};
-    static const uint8_t mac_b[6]={0xcc,0x8d,0xa2,0xf2,0xcc,0x54};
-    uint8_t actual[6];
-    ESP_ERROR_CHECK(esp_read_mac(actual,ESP_MAC_WIFI_STA));
-    // Isolation trial: COM12 hosts B, COM5 hosts A.
-    node=!memcmp(actual,mac_a,6) ? 2 : !memcmp(actual,mac_b,6) ? 1 : 0;
-    ESP_ERROR_CHECK(node ? ESP_OK : ESP_ERR_INVALID_STATE);
+        node=1;
 #endif
-    atomic_store(&channel,node==1 ? 1 : 7);
+    }
+    atomic_store(&channel,room_channel[node-1]);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 }
 #endif

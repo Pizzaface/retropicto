@@ -11,3 +11,5 @@ void online_message(const pictochat_event_t *event);
 unsigned online_ghost_count(void);
 unsigned online_channel(void);
 unsigned online_node(void);
+/* 1..4 = DS room A..D; persisted, applied after restart. */
+bool online_room_save(unsigned room);

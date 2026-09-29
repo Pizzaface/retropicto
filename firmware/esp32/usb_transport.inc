@@ -47,7 +47,19 @@ static int hex_digit(char c) {
     if (c>='A' && c<='F') return c-'A'+10;
     return -1;
 }
+static void usb_info(void) {
+    char text[80];
+    int n=snprintf(text,sizeof(text),"\n@INFO room=%c channel=%u local=%u ghosts=%u\n",'A'+node-1,online_channel(),LOCAL_SLOTS,GHOST_SLOTS);
+    usb_write(text,(size_t)n);
+}
 static bool usb_line(size_t size,int64_t now) {
+    if (size==6 && !memcmp(usb_rx_line,"@INFO?",6)) { usb_info(); return true; }
+    if (size==7 && !memcmp(usb_rx_line,"@ROOM ",6) && usb_rx_line[6]>='A' && usb_rx_line[6]<='D') {
+        bool ok=online_room_save((unsigned)(usb_rx_line[6]-'A'+1));
+        usb_write(ok ? "\n@ROOM OK\n" : "\n@ROOM FAIL\n",ok ? 10 : 12);
+        if (ok) { vTaskDelay(pdMS_TO_TICKS(200)); esp_restart(); }
+        return ok;
+    }
     if (size<6+2*RELAY_HEADER || memcmp(usb_rx_line,"@PCTR ",6) || (size-6)%2) return false;
     size_t bytes=(size-6)/2;
     if (bytes>sizeof(usb_wire)) return false;
@@ -89,4 +101,5 @@ static void usb_start(void) {
     BaseType_t created=xTaskCreate(usb_task,"usb_relay",6144,NULL,2,NULL);
     configASSERT(created==pdPASS);
     ESP_LOGI(TAG,"USB relay ready node=%u room=%c channel=%u local=%u ghosts=%u",node,'A'+node-1,online_channel(),LOCAL_SLOTS,GHOST_SLOTS);
+    usb_info();
 }

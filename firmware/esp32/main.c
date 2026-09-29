@@ -1565,7 +1565,7 @@ static void host_task(void *arg) {
     for (unsigned i=0; i<6; ++i) profile[2+i]=HOST_SELF_MAC[i^1];
 #if PICTOCHAT_ONLINE
     memset(profile+8,0,20);
-    const char *name=online_node()==1 ? "RELAY A" : "RELAY B";
+    char name[8]="RELAY ?"; name[6]=(char)('A'+online_node()-1);
     for (unsigned i=0; name[i]; ++i) profile[8+2*i]=(uint8_t)name[i];
     static const uint_least16_t relay_bio[]=u"Wi-Fi PictoChat bridge";
     host_profile_set_bio(profile,relay_bio,sizeof(relay_bio)/sizeof(relay_bio[0])-1);
