@@ -1691,6 +1691,10 @@ static void wifi_init(void) {
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    // DS room C lives on channel 13; the default "01" (US) regdomain stops at 11 and the
+    // driver aborts on set_channel(13). Use a 13-channel domain, manual policy.
+    wifi_country_t country = {.cc = "JP", .schan = 1, .nchan = 13, .policy = WIFI_COUNTRY_POLICY_MANUAL};
+    ESP_ERROR_CHECK(esp_wifi_set_country(&country));
 
 #if SNIFFER_MODE == MODE_STREAM
     esp_netif_create_default_wifi_ap();
