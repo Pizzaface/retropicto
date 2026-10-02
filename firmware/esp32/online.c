@@ -453,6 +453,9 @@ static void network_task(void *arg) {
 #else
 #include "usb_transport.inc"
 #endif
+#if !PICTOCHAT_USB
+bool online_room_wanted(int64_t now) { (void)now; return true; }
+#endif
 void online_start(void) {
     outgoing=xQueueCreate(2,sizeof(drawing_t *)); incoming=xQueueCreate(1,sizeof(drawing_t *));
     acknowledgments=xQueueCreate(4,sizeof(ack_t));

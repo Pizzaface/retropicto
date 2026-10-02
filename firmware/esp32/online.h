@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include "pictochat/room.h"
 
 /* Configure after esp_wifi_init, before start; run after radio setup. */
@@ -11,5 +12,7 @@ void online_message(const pictochat_event_t *event);
 unsigned online_ghost_count(void);
 unsigned online_channel(void);
 unsigned online_node(void);
+/* USB builds: true only while the bridge is online (recent @OPEN); others: always. */
+bool online_room_wanted(int64_t now);
 /* 1..4 = DS room A..D; persisted, applied after restart. */
 bool online_room_save(unsigned room);

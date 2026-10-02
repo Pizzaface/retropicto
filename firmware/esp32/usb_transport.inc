@@ -55,8 +55,15 @@ static void usb_info(void) {
     int n=snprintf(text,sizeof(text),"\n@INFO room=%c channel=%u local=%u ghosts=%u build=%s\n",'A'+node-1,online_channel(),LOCAL_SLOTS,GHOST_SLOTS,build);
     usb_write(text,(size_t)n);
 }
+/* The bridge keeps the DS room open with "@OPEN" every few seconds; silence (app died, cable pulled,
+ * kicked/banned) closes it, so a DS never sits in a room that goes nowhere. */
+#define USB_OPEN_HOLD_US 10000000LL
+static volatile int64_t usb_open_until;
+bool online_room_wanted(int64_t now) { return now<usb_open_until; }
 static bool usb_line(size_t size,int64_t now) {
     if (size==6 && !memcmp(usb_rx_line,"@INFO?",6)) { usb_info(); return true; }
+    if (size==5 && !memcmp(usb_rx_line,"@OPEN",5)) { usb_open_until=now+USB_OPEN_HOLD_US; return true; }
+    if (size==6 && !memcmp(usb_rx_line,"@CLOSE",6)) { usb_open_until=0; return true; }
     if (size==7 && !memcmp(usb_rx_line,"@ROOM ",6) && usb_rx_line[6]>='A' && usb_rx_line[6]<='D') {
         bool ok=online_room_save((unsigned)(usb_rx_line[6]-'A'+1));
         usb_write(ok ? "\n@ROOM OK\n" : "\n@ROOM FAIL\n",ok ? 10 : 12);

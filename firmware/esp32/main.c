@@ -653,10 +653,26 @@ static uint8_t k_pictochat_vendor_ie[34] = {
 // re-register can't fail). Called on STA connect/disconnect.
 static void host_set_beacon_users(uint8_t n) {
     k_pictochat_vendor_ie[HOST_VIE_USERS_OFF] = n;
+    if (!s_host_beaconing) return; // room closed: keep the IE off the air
     esp_wifi_set_vendor_ie(false, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0,
                            k_pictochat_vendor_ie);
     esp_wifi_set_vendor_ie(true, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0,
                            k_pictochat_vendor_ie);
+}
+
+// Show or hide the PictoChat room: the 0xDD IE is what a DS looks for, so dropping it makes
+// the room vanish from the DS list; stations already inside are deauthed so they fall out too.
+static void host_set_visible(bool visible) {
+    if (visible == s_host_beaconing) return;
+    s_host_beaconing = visible;
+    if (visible) {
+        esp_wifi_set_vendor_ie(false, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0, k_pictochat_vendor_ie);
+        esp_wifi_set_vendor_ie(true, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0, k_pictochat_vendor_ie);
+    } else {
+        esp_wifi_set_vendor_ie(false, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0, k_pictochat_vendor_ie);
+        esp_wifi_deauth_sta(0);
+    }
+    ESP_LOGI(TAG, "room %s", visible ? "open" : "closed");
 }
 
 // Strong-symbol override of the IDF beacon builder's DS-Parameter-Set writer (linker
@@ -1552,7 +1568,8 @@ static void host_task(void *arg) {
             }
         }
 #if PICTOCHAT_ONLINE
-        if (online_tick(s_room)) host_set_beacon_users(1 + clients + online_ghost_count());
+        host_set_visible(online_room_wanted(now));
+        if (online_tick(s_room) && s_host_beaconing) host_set_beacon_users(1 + clients + online_ghost_count());
 #endif
         // PICTOBOT is a room participant: every member receives the same reply.
         // Keep the queued body until each recipient has copied it or disconnected.
@@ -1795,9 +1812,11 @@ static void wifi_init(void) {
     // so a re-register can't fail), then arm the SSID-delete beacon surgery.
     esp_wifi_set_vendor_ie(false, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0,
                            k_pictochat_vendor_ie);
+#if !PICTOCHAT_USB
     ESP_ERROR_CHECK(esp_wifi_set_vendor_ie(true, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0,
                                            k_pictochat_vendor_ie));
     s_host_beaconing = true;
+#endif
 #if PICTOCHAT_GHOST_DEMO
     host_set_beacon_users(2);
 #endif
