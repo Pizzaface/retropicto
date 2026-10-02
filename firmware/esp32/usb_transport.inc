@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include "driver/usb_serial_jtag.h"
+#include "esp_app_desc.h"
 #define USB_WIRE_MAX (RELAY_HEADER+RELAY_MAX_PAYLOAD)
 #define USB_LINE_MAX (6+2*USB_WIRE_MAX)
 static QueueHandle_t usb_logs;
@@ -48,8 +49,10 @@ static int hex_digit(char c) {
     return -1;
 }
 static void usb_info(void) {
-    char text[80];
-    int n=snprintf(text,sizeof(text),"\n@INFO room=%c channel=%u local=%u ghosts=%u\n",'A'+node-1,online_channel(),LOCAL_SLOTS,GHOST_SLOTS);
+    char text[112], build[17];
+    const esp_app_desc_t *app=esp_app_get_description();
+    for (int i=0;i<8;i++) snprintf(build+2*i,3,"%02x",app->app_elf_sha256[i]);
+    int n=snprintf(text,sizeof(text),"\n@INFO room=%c channel=%u local=%u ghosts=%u build=%s\n",'A'+node-1,online_channel(),LOCAL_SLOTS,GHOST_SLOTS,build);
     usb_write(text,(size_t)n);
 }
 static bool usb_line(size_t size,int64_t now) {
