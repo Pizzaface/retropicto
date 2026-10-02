@@ -135,5 +135,22 @@ included alongside library tests. To create a local source-and-firmware ZIP,
 run `python tools/package_release.py`; it uses only files in this checkout and
 does not include local credentials or generated build folders.
 
+### C source style
+
+First-party C sources, headers, tests, and transport fragments use the checked-in
+`.clang-format`. Include order, protocol constants, and captured byte arrays are
+kept intact. Use the same formatter version for repeatable changes:
+
+```sh
+python -m pip install clang-format==18.1.8
+python tools/format_c.py --check
+python tools/format_c.py
+```
+
+The `--check` command checks formatting without editing; omit it to apply the style.
+The formatter excludes generated Wi-Fi credentials and third-party code. Run the
+native C tests after editing, and build the relevant PlatformIO environments before
+hardware validation. Formatting or a native test pass is not a radio smoke test.
+
 No source license is declared yet. Third-party AI example assets retain their
 own notices; read their adjacent license files before redistribution.

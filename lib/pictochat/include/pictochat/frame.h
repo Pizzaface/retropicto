@@ -9,8 +9,8 @@
 size_t pictochat_frame_empty(uint8_t *out, size_t capacity, const uint8_t host[6]);
 size_t pictochat_frame_members(uint8_t *out, size_t capacity, const uint8_t host[6],
                                const uint8_t *client, uint16_t kind,
-                               host_poll_fields_result_t fields, uint32_t magic,
-                               uint16_t sequence, bool admitted);
+                               host_poll_fields_result_t fields, uint32_t magic, uint16_t sequence,
+                               bool admitted);
 size_t pictochat_frame_app(uint8_t *out, size_t capacity, const uint8_t host[6],
                            const host_id_packet_t *app, uint16_t sequence);
 size_t pictochat_frame_ack(uint8_t *out, size_t capacity, const uint8_t host[6]);
@@ -18,7 +18,8 @@ size_t pictochat_frame_ack(uint8_t *out, size_t capacity, const uint8_t host[6])
  * Poll exactly one AID at a time; application footer targets the same AID.
  * The legacy helpers above retain their AID-1 wire format. */
 size_t pictochat_frame_room_members(uint8_t *out, size_t capacity, const uint8_t host[6],
-    const uint8_t members[16][6], uint16_t kind, host_poll_fields_result_t fields,
-    uint32_t magic, uint16_t sequence, bool admitted);
+                                    const uint8_t members[16][6], uint16_t kind,
+                                    host_poll_fields_result_t fields, uint32_t magic,
+                                    uint16_t sequence, bool admitted);
 size_t pictochat_frame_target_app(uint8_t *out, size_t capacity, const uint8_t host[6],
-    const host_id_packet_t *app, uint16_t sequence, uint16_t target);
+                                  const host_id_packet_t *app, uint16_t sequence, uint16_t target);

@@ -1,9 +1,8 @@
 #include <assert.h>
 #include "pictochat/host_identity.h"
 #include "host_identity_fixture.h"
-static const uint8_t request_identity[] = {
-    1,0,20,0,1,0,0xff,0xff,84,0,0,0,0,0,0,0,0xb7,0x78,0xd5,0x29
-};
+static const uint8_t request_identity[] = {1, 0, 20, 0, 1, 0, 0xff, 0xff, 84,   0,
+                                           0, 0, 0,  0, 0, 0, 0xb7, 0x78, 0xd5, 0x29};
 
 static void expect_next(host_identity_t *s, const uint8_t *bytes, size_t len) {
     host_id_packet_t out;
@@ -53,15 +52,18 @@ int main(void) {
     // Malformed/foreign transfers cannot start a relay or advance identity state.
     assert(!host_identity_receive(&state, client_announce0, sizeof(client_announce0) - 1));
     uint8_t bad[96];
-    memcpy(bad, client_announce0, sizeof(client_announce0)); bad[4] = 2;
+    memcpy(bad, client_announce0, sizeof(client_announce0));
+    bad[4] = 2;
     assert(!host_identity_receive(&state, bad, sizeof(client_announce0)));
     assert(host_identity_receive(&state, client_announce0, sizeof(client_announce0)));
     // A second receive cannot overwrite a queued announcement.
     assert(!host_identity_receive(&state, client_data0, sizeof(client_data0)));
     expect_next(&state, relay_announce0, sizeof(relay_announce0));
-    memcpy(bad, client_data0, sizeof(client_data0)); bad[6]--;
+    memcpy(bad, client_data0, sizeof(client_data0));
+    bad[6]--;
     assert(!host_identity_receive(&state, bad, sizeof(bad)));
-    memcpy(bad, client_data0, sizeof(client_data0)); bad[8] = 1;
+    memcpy(bad, client_data0, sizeof(client_data0));
+    bad[8] = 1;
     assert(!host_identity_receive(&state, bad, sizeof(bad)));
     assert(state.phase == HOST_ID_ANNOUNCE1);
     // With no client application replies, still publish both host stages.
@@ -74,9 +76,8 @@ int main(void) {
     assert(!host_identity_next(&state, own_data0 + 12, &out));
     assert(state.phase == HOST_ID_WAIT1);
     // Announcement captured from Jordan at AID 2 during the two-console trial.
-    static const uint8_t announce2[20] = {
-        0,0,20,0,2,0,0xff,0xff,84,0,0,0,0xe4,0x51,0x3a,2,0x6d,0xb0,0x6e,0xe9
-    };
+    static const uint8_t announce2[20] = {0, 0, 20,   0,    2,    0, 0xff, 0xff, 84,   0,
+                                          0, 0, 0xe4, 0x51, 0x3a, 2, 0x6d, 0xb0, 0x6e, 0xe9};
     host_identity_reset(&state, 1, 2);
     state.client_slot = 2;
     assert(!host_identity_receive(&state, client_announce0, sizeof(client_announce0)));
@@ -84,7 +85,8 @@ int main(void) {
     assert(host_identity_next(&state, own_data0 + 12, &out));
     assert(out.bytes[0] == 1 && out.bytes[4] == 2);
     assert(!memcmp(out.bytes + 1, announce2 + 1, 19));
-    memcpy(bad, client_data0, sizeof(bad)); bad[4] = 2;
+    memcpy(bad, client_data0, sizeof(bad));
+    bad[4] = 2;
     assert(host_identity_receive(&state, bad, sizeof(bad)));
     assert(host_identity_next(&state, own_data0 + 12, &out));
     assert(!memcmp(out.bytes, bad, sizeof(bad)));

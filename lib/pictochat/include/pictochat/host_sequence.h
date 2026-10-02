@@ -3,7 +3,10 @@
 #include <stdint.h>
 
 typedef enum {
-    HOST_FRAME_EMPTY, HOST_FRAME_ROSTER, HOST_FRAME_HEARTBEAT, HOST_FRAME_SESSION
+    HOST_FRAME_EMPTY,
+    HOST_FRAME_ROSTER,
+    HOST_FRAME_HEARTBEAT,
+    HOST_FRAME_SESSION
 } host_frame_t;
 
 typedef struct {
@@ -24,7 +27,8 @@ static inline host_frame_t host_sequence_next(host_sequence_t *seq, bool admitte
         return HOST_FRAME_EMPTY;
     }
     if (!seq->admitted) {
-        if (!admitted) return HOST_FRAME_HEARTBEAT;
+        if (!admitted)
+            return HOST_FRAME_HEARTBEAT;
         seq->admitted = true;
         seq->roster_left = 7;
     }

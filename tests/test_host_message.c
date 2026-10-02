@@ -13,19 +13,24 @@ int main(void) {
     unsigned n = 0;
     for (;;) {
         int lo = fgetc(f), hi;
-        if (lo == EOF) break;
-        hi = fgetc(f); assert(hi != EOF && n < 128);
+        if (lo == EOF)
+            break;
+        hi = fgetc(f);
+        assert(hi != EOF && n < 128);
         packets[n].len = (uint16_t)(lo | (hi << 8));
         assert(packets[n].len <= sizeof(packets[n].bytes));
         assert(fread(packets[n].bytes, 1, packets[n].len, f) == packets[n].len);
         ++n;
     }
     fclose(f);
-    f = fopen("tests/fixtures/send-message.bin", "rb"); assert(f);
-    size_t total = fread(expected, 1, sizeof(expected), f); fclose(f);
+    f = fopen("tests/fixtures/send-message.bin", "rb");
+    assert(f);
+    size_t total = fread(expected, 1, sizeof(expected), f);
+    fclose(f);
     assert(total == 2084 && n > 13);
     unsigned first_data = 0;
-    while (first_data < n && packets[first_data].bytes[0] != 2) ++first_data;
+    while (first_data < n && packets[first_data].bytes[0] != 2)
+        ++first_data;
     assert(first_data < n);
 
     host_identity_t identity;
@@ -40,22 +45,25 @@ int main(void) {
         host_id_packet_t *p = &packets[i];
         assert(host_identity_receive(&identity, p->bytes, p->len));
         int result = host_message_receive(&rx, p->bytes, p->len);
-        assert(result >= 0); complete += result == 1;
+        assert(result >= 0);
+        complete += result == 1;
         assert(host_identity_next(&identity, profile, &out));
         assert(out.len == p->len);
         assert(out.bytes[0] == (p->bytes[0] == 0 ? 1 : 2));
         assert(memcmp(out.bytes + 1, p->bytes + 1, p->len - 1) == 0);
-        if (p->len == 16 && p->bytes[0] == 2 && p->bytes[7] == 1) ++short_final;
+        if (p->len == 16 && p->bytes[0] == 2 && p->bytes[7] == 1)
+            ++short_final;
     }
     assert(complete == 1 && short_final && rx.total == total);
     assert(memcmp(rx.body, expected, total) == 0);
 
     // Sender output must preserve the exact received bitmap and metadata except
     // for the host sender MAC. Validate offsets/bytes independently of RX parsing.
-    uint8_t mac[6] = {0,9,0xbf,0xc6,0xc6,0xc6};
+    uint8_t mac[6] = {0, 9, 0xbf, 0xc6, 0xc6, 0xc6};
     host_message_reply(&tx, rx.announcement, rx.body, rx.total, mac, 0x12345678);
     for (unsigned copy = 0; copy < HOST_MESSAGE_COPIES; ++copy)
-        assert(host_message_next(&tx, &out) && out.len == 20 && out.bytes[0] == 1 && out.bytes[4] == 0);
+        assert(host_message_next(&tx, &out) && out.len == 20 && out.bytes[0] == 1 &&
+               out.bytes[4] == 0);
     assert(host_message_u16(out.bytes + 8) == total);
     unsigned offset = 0;
     unsigned copies = 0;
@@ -79,15 +87,17 @@ int main(void) {
     // A final fragment arriving early does not complete a drawing with holes.
     host_message_reset(&rx);
     assert(host_message_receive(&rx, packets[0].bytes, packets[0].len) == 0);
-    assert(host_message_receive(&rx, packets[n-1].bytes, packets[n-1].len) == 0);
+    assert(host_message_receive(&rx, packets[n - 1].bytes, packets[n - 1].len) == 0);
     assert(!rx.complete);
     // Conflicting overlap invalidates the transfer, rather than mixing pixels.
     assert(host_message_receive(&rx, packets[first_data].bytes, packets[first_data].len) == 0);
-    out = packets[first_data]; out.bytes[12] ^= 1;
+    out = packets[first_data];
+    out.bytes[12] ^= 1;
     assert(host_message_receive(&rx, out.bytes, out.len) == -1 && rx.invalid);
     assert(host_message_receive(&rx, packets[first_data].bytes, packets[first_data].len) == 0);
     // A new announcement must discard old coverage.
-    out = packets[0]; out.bytes[16] ^= 1;
+    out = packets[0];
+    out.bytes[16] ^= 1;
     assert(host_message_receive(&rx, out.bytes, out.len) == 0);
     assert(rx.covered == 0 && !rx.invalid && !rx.complete);
     assert(host_message_receive(&rx, packets[first_data].bytes, packets[first_data].len - 1) == -1);
