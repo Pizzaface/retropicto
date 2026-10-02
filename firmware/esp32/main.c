@@ -478,7 +478,8 @@ static bool s_cycle_open;
 static int64_t s_cycle_started_us; // admission lock; software submission time
 static atomic_uint s_reply_closed, s_reply_other, s_reply_invalid;
 static atomic_int s_reply_rssi, s_reply_noise, s_reply_delay_us;
-static volatile bool     s_host_beaconing = false; // arm the beacon SSID-delete surgery
+static volatile bool     s_host_beaconing = false;
+static volatile bool     s_room_visible = false;   // PictoChat room IE on the air // arm the beacon SSID-delete surgery
 static volatile uint32_t s_rx_replies = 0;         // client REPLYs we've seen
 static volatile uint32_t s_cmds_tx = 0;
 static portMUX_TYPE s_admission_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -653,7 +654,7 @@ static uint8_t k_pictochat_vendor_ie[34] = {
 // re-register can't fail). Called on STA connect/disconnect.
 static void host_set_beacon_users(uint8_t n) {
     k_pictochat_vendor_ie[HOST_VIE_USERS_OFF] = n;
-    if (!s_host_beaconing) return; // room closed: keep the IE off the air
+    if (!s_room_visible) return; // room closed: keep the IE off the air
     esp_wifi_set_vendor_ie(false, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0,
                            k_pictochat_vendor_ie);
     esp_wifi_set_vendor_ie(true, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0,
@@ -663,8 +664,8 @@ static void host_set_beacon_users(uint8_t n) {
 // Show or hide the PictoChat room: the 0xDD IE is what a DS looks for, so dropping it makes
 // the room vanish from the DS list; stations already inside are deauthed so they fall out too.
 static void host_set_visible(bool visible) {
-    if (visible == s_host_beaconing) return;
-    s_host_beaconing = visible;
+    if (visible == s_room_visible) return;
+    s_room_visible = visible;
     if (visible) {
         esp_wifi_set_vendor_ie(false, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0, k_pictochat_vendor_ie);
         esp_wifi_set_vendor_ie(true, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0, k_pictochat_vendor_ie);
@@ -1569,7 +1570,7 @@ static void host_task(void *arg) {
         }
 #if PICTOCHAT_ONLINE
         host_set_visible(online_room_wanted(now));
-        if (online_tick(s_room) && s_host_beaconing) host_set_beacon_users(1 + clients + online_ghost_count());
+        if (online_tick(s_room) && s_room_visible) host_set_beacon_users(1 + clients + online_ghost_count());
 #endif
         // PICTOBOT is a room participant: every member receives the same reply.
         // Keep the queued body until each recipient has copied it or disconnected.
@@ -1815,8 +1816,10 @@ static void wifi_init(void) {
 #if !PICTOCHAT_USB
     ESP_ERROR_CHECK(esp_wifi_set_vendor_ie(true, WIFI_VND_IE_TYPE_BEACON, WIFI_VND_IE_ID_0,
                                            k_pictochat_vendor_ie));
-    s_host_beaconing = true;
+    s_room_visible = true;
 #endif
+    // Beacon SSID-delete surgery is armed from boot regardless; USB builds add the room IE only on @OPEN.
+    s_host_beaconing = true;
 #if PICTOCHAT_GHOST_DEMO
     host_set_beacon_users(2);
 #endif
