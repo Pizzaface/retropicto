@@ -4,10 +4,27 @@ The adapter in `firmware/esp32/main.c` supplies radio I/O, timing, queues, loggi
 and the example echo-bot policy. It uses the portable library for host protocol
 state and frame encoding. PlatformIO builds it with ESP-IDF.
 
+## Source map
+
+- `firmware_config.h`: compile-time mode selection, room/channel defaults, capture
+  settings, and demo slot constants. PlatformIO build flags retain precedence.
+- `capture_packet.h`: internal, allocation-free frame-control, MAC-header-length,
+  and radiotap helpers. Native tests check these bytes without ESP-IDF.
+- `main.c`: radio identities and state, target-specific transmit hooks, the
+  promiscuous callback, mode tasks, and startup. Host profile construction and
+  periodic status logging are separate helpers so the host loop is easier to scan.
+- `online.c`: local/remote member state, drawing queues, relay scheduling, and LAN
+  transport. `ble_transport.inc` and `usb_transport.inc` are private implementation
+  fragments included by this translation unit; they share its state intentionally.
+
+Keep the radio callbacks, ACK ownership, completion waits, attributes, and timing
+constants together when reviewing changes. Moving a helper does not establish that
+radio behavior has been validated on hardware.
+
 ## Board modes
 
 Select a mode by environment; `platformio.ini` supplies `SNIFFER_MODE`. Changing
-the fallback define in the C file does not override that build flag.
+the fallback define in `firmware_config.h` does not override that build flag.
 
 | Environment | Board | Behavior | Configured port |
 | --- | --- | --- | --- |
@@ -40,7 +57,8 @@ Edit the example `host_profile` and `host_profile_bio` in `main.c`. The Bio is a
 UTF-16 literal with at most 26 code units; library users can set it at runtime with
 `host_profile_set_bio`. Rebuild and rejoin to test a firmware profile change.
 Host/joiner MACs, chat room, capture channel and sniffer AP credentials are example
-configuration near the top of `main.c`, not library defaults.
+configuration in `main.c` (radio identities) and `firmware_config.h` (mode, room,
+channel and AP defaults), not library defaults.
 
 For discovery, build/upload `esp32dev_disc`, then watch serial while DS consoles
 enter a room. Set `CAPTURE_CHANNEL` to their observed channel before using a

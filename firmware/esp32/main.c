@@ -1,21 +1,16 @@
-// pictochat_sniffer.c — ESP32 Nintendo DS / PictoChat 802.11 sniffer.
+// RetroPicto ESP32 adapter: radio I/O, capture, and PictoChat room tasks.
 //
-// Two build-time modes (see CONFIG block):
+// platformio.ini selects one of five SNIFFER_MODE values:
+//   MODE_DISCOVERY    Channel-hopping Nintendo-frame discovery over serial.
+//   MODE_STREAM       Fixed-channel radiotap/PCAP capture over SoftAP UDP.
+//   MODE_JOIN         Experimental active client for a real DS room host.
+//   MODE_HOST         PictoChat room host, echo bot, or online relay adapter.
+//   MODE_SERIAL_MGMT  Fixed-channel USB-only handshake and packet diagnostics.
 //
-//   MODE_DISCOVERY  Channel-hops 1..13 with the radio in promiscuous mode and
-//                   prints every Nintendo-OUI frame it sees, tagged with the
-//                   channel. Use this first to find which channel your DSs are
-//                   talking on. No WiFi link, no UDP — serial only.
-//
-//   MODE_STREAM     Brings up a SoftAP on CAPTURE_CHANNEL, captures on that one
-//                   channel, wraps each Nintendo frame in a radiotap + libpcap
-//                   record, and blasts it as UDP broadcast to the SoftAP subnet.
-//                   Join the SoftAP from your PC and feed the UDP into Wireshark
-//                   (see tools/udp_to_wireshark.py).
-//
-// Single radio => single channel. In STREAM mode the SoftAP, the capture, and
-// the UDP link all share CAPTURE_CHANNEL. That is why discovery is a separate
-// step: you cannot hop channels and keep a WiFi link up at the same time.
+// Compile-time defaults live in firmware_config.h; capture byte helpers live in
+// capture_packet.h. Radio state, callbacks, and task ordering stay together here.
+// One radio serves one channel: STREAM capture and its SoftAP share that channel.
+// See docs/FIRMWARE.md for the source map and hardware-validation workflow.
 
 #include <string.h>
 #include <stdio.h>
@@ -53,21 +48,8 @@
 
 #include "pictochat/nintendo.h"
 
-// ============================ CONFIG ============================
-// Pick exactly one mode. SNIFFER_MODE is normally set per-board by a build flag
-// in platformio.ini; the default here keeps a bare `pio run` doing STREAM.
-#define MODE_DISCOVERY 0
-#define MODE_STREAM    1
-#define MODE_JOIN      2
-#define MODE_HOST      3
-#define MODE_SERIAL_MGMT 4 // fixed-channel, USB-only handshake diagnostics
-#ifndef SNIFFER_MODE
-#define SNIFFER_MODE   MODE_STREAM
-#endif
-
-#ifndef PICTOCHAT_ONLINE
-#define PICTOCHAT_ONLINE 0
-#endif
+#include "firmware_config.h"
+#include "capture_packet.h"
 
 // ---- MODE_JOIN: join a real DS host as an ACTIVE 802.11 client ----
 // Corrected model (see PROTOCOL.md): association is standard and CLIENT-initiated.
@@ -92,60 +74,9 @@ static DRAM_ATTR uint8_t HOST_SELF_MAC[6] = {0x00,0x09,0xbf,0xc6,0xc6,0xd0};
 #else
 static DRAM_ATTR const uint8_t HOST_SELF_MAC[6] = {0x00,0x09,0xBF,0xC6,0xC6,0xC6};
 #endif
-#ifndef PICTOCHAT_GHOST_DEMO
-#define PICTOCHAT_GHOST_DEMO 0
-#endif
-#if PICTOCHAT_ONLINE
-#ifndef ONLINE_LOCAL_SLOTS
-#define ONLINE_LOCAL_SLOTS 1u
-#endif
-#define HOST_RADIO_CLIENTS ONLINE_LOCAL_SLOTS
-#else
-#define HOST_RADIO_CLIENTS (PICTOCHAT_ROOM_CLIENTS - PICTOCHAT_GHOST_DEMO)
-#endif
 #if PICTOCHAT_GHOST_DEMO
-#define GHOST_SLOT (PICTOCHAT_ROOM_CLIENTS - 1u)
-#define GHOST_AID 15u
-#define GHOST_GENERATION 1u
 static const uint8_t GHOST_MAC[6] = {0x00,0x09,0xbf,0xc6,0xc6,0xc7};
 #endif
-#if PICTOCHAT_ONLINE
-#define HOST_CHATROOM (online_node()-1)
-
-#else
-#ifndef HOST_CHATROOM
-#define HOST_CHATROOM  1        // 0..3 = rooms A..D (perfect01 host used B=1)
-#endif
-_Static_assert(HOST_CHATROOM >= 0 && HOST_CHATROOM <= 3, "Room must be A..D (0..3)");
-#endif
-#define JOIN_RETRY_MS   700        // resend Auth-Req if no progress within this
-#define ASSOC_RESEND_MAX 3         // resend Assoc-Req this many times before re-auth
-#define RX_STALL_SECS   6          // watchdog: no Nintendo frame for this long => wedge
-#define SEND_PROFILE    1          // 1 = send identity card in reply slots;
-                                   // 0 = empty-reply keepalive (isolation test)
-
-// SoftAP the PC joins in STREAM mode.
-#define AP_SSID        "pictochat-sniffer"
-#define AP_PASS        "dspackets"       // >= 8 chars, or "" for an open AP
-#define AP_MAX_CONN    2
-
-// The channel to capture + stream on. Set this to whatever MODE_DISCOVERY told
-// you your DSs are using. SoftAP and capture both use it.
-#ifndef CAPTURE_CHANNEL
-#define CAPTURE_CHANNEL 7
-#endif
-
-// UDP: frames are broadcast to <softap-subnet>.255 : UDP_PORT.
-#define UDP_PORT       5555
-
-// The ESP32 promiscuous payload usually carries the 4-byte FCS at the end.
-// Setting this reflects that in the radiotap FLAGS field so Wireshark accounts
-// for it. If your captures show a bogus 4-byte trailer, set this to 0.
-#define FCS_AT_END     1
-
-// libpcap link-layer type. 127 = LINKTYPE_IEEE802_11_RADIOTAP.
-#define PCAP_LINKTYPE  127
-// ===============================================================
 
 static const uint_least16_t host_profile_bio[] = u"Hi from PICTOBOT!";
 _Static_assert(sizeof(host_profile_bio) / sizeof(host_profile_bio[0]) - 1 <=
@@ -162,33 +93,6 @@ static void host_log_heap(const char *stage) {
              (unsigned)info.minimum_free_bytes, (unsigned)info.largest_free_block);
 }
 #endif
-
-// ---- 802.11 header field offsets (little bits of layout we rely on) ----
-#define WLAN_FC_OFFSET   0   // frame control (2 bytes)
-#define WLAN_ADDR1_OFF   4   // receiver / destination
-#define WLAN_ADDR2_OFF  10   // transmitter / source
-#define WLAN_ADDR3_OFF  16   // BSSID (usually)
-
-// Frame Control decode helpers.
-static inline uint8_t fc_type(const uint8_t *f)    { return (f[0] >> 2) & 0x3; }
-static inline uint8_t fc_subtype(const uint8_t *f) { return (f[0] >> 4) & 0xF; }
-static inline bool fc_to_ds(const uint8_t *f)      { return f[1] & 0x01; }
-static inline bool fc_from_ds(const uint8_t *f)    { return f[1] & 0x02; }
-
-// Length of the 802.11 MAC header for a given frame (handles addr4 + QoS).
-static size_t wlan_header_len(const uint8_t *f, size_t len) {
-    if (len < 24) return len;
-    size_t hdr = 24;
-    uint8_t type = fc_type(f);
-    if (type == 2 /* data */ && fc_to_ds(f) && fc_from_ds(f)) {
-        hdr += 6; // addr4 present
-    }
-    // QoS data subtypes have the QoS control field (2 bytes).
-    if (type == 2 && (fc_subtype(f) & 0x08)) {
-        hdr += 2;
-    }
-    return hdr > len ? len : hdr;
-}
 
 // ---- Capture queue: keep the WiFi RX callback cheap, do sends in a task ----
 #define CAP_MAX_BYTES  600         // radiotap + frame; DS frames are small
@@ -223,40 +127,6 @@ static mp_trace_t s_mp_trace;
 static volatile uint32_t s_usb_empty_replies = 0, s_usb_data_replies = 0;
 static volatile uint32_t s_usb_reply_bytes = 0, s_usb_host_cmds = 0;
 #endif
-
-// ---- Minimal radiotap header (version 0) ----
-// Present fields, in bit order: FLAGS(1), CHANNEL(3), DBM_ANTSIGNAL(5).
-// Layout: [ver][pad][len:2][present:4][flags:1][pad:1][chanfreq:2][chanflags:2][antsignal:1]
-#define RT_PRESENT ((1u << 1) | (1u << 3) | (1u << 5))
-#define RT_LEN     15
-
-static size_t build_radiotap(uint8_t *out, uint8_t channel, int8_t rssi) {
-    memset(out, 0, RT_LEN);
-    out[0] = 0;                               // it_version
-    out[1] = 0;                               // it_pad
-    out[2] = RT_LEN & 0xFF;                   // it_len (LE)
-    out[3] = (RT_LEN >> 8) & 0xFF;
-    out[4] = RT_PRESENT & 0xFF;               // it_present (LE)
-    out[5] = (RT_PRESENT >> 8) & 0xFF;
-    out[6] = (RT_PRESENT >> 16) & 0xFF;
-    out[7] = (RT_PRESENT >> 24) & 0xFF;
-
-    // FLAGS (offset 8): bit4 (0x10) = FCS present at end of frame.
-    out[8] = FCS_AT_END ? 0x10 : 0x00;
-    // out[9] is alignment padding for the u16 channel field.
-
-    // CHANNEL (offset 10): frequency in MHz, then channel flags.
-    uint16_t freq = (channel == 14) ? 2484 : (2407 + channel * 5);
-    out[10] = freq & 0xFF;
-    out[11] = (freq >> 8) & 0xFF;
-    uint16_t chflags = 0x0080; // 2 GHz spectrum
-    out[12] = chflags & 0xFF;
-    out[13] = (chflags >> 8) & 0xFF;
-
-    // DBM_ANTSIGNAL (offset 14): signed dBm.
-    out[14] = (uint8_t)rssi;
-    return RT_LEN;
-}
 
 #if SNIFFER_MODE == MODE_JOIN || SNIFFER_MODE == MODE_HOST
 // esp_wifi_80211_tx() rejects auth/assoc management subtypes by default. This
@@ -1552,12 +1422,8 @@ static void host_room_event(void *context, const pictochat_event_t *event) {
     }
 }
 
-static void host_task(void *arg) {
-    uint32_t last_cmds = 0;
-    uint32_t rx_rejected[PICTOCHAT_ROOM_CLIENTS] = {0};
-    int64_t next_stat = 0;
-    uint8_t profile[84];
-    memcpy(profile, host_profile, sizeof(profile));
+static void host_build_profile(uint8_t profile[84]) {
+    memcpy(profile, host_profile, sizeof(host_profile));
     bool profile_ok = host_profile_set_bio(profile, host_profile_bio,
                       sizeof(host_profile_bio) / sizeof(host_profile_bio[0]) - 1);
     configASSERT(profile_ok);
@@ -1570,6 +1436,63 @@ static void host_task(void *arg) {
     static const uint_least16_t relay_bio[]=u"Wi-Fi PictoChat bridge";
     host_profile_set_bio(profile,relay_bio,sizeof(relay_bio)/sizeof(relay_bio[0])-1);
 #endif
+}
+
+static void host_log_status(unsigned clients,
+                            const uint32_t rx_rejected[PICTOCHAT_ROOM_CLIENTS],
+                            uint32_t last_cmds) {
+    ESP_LOGI(TAG, "HOST: clients=%u cmds_tx=%lu rx_replies=%lu reply_acks=%lu timeouts=%lu "
+             "(+%lu cmd/s)", clients, (unsigned long)s_cmds_tx,
+             (unsigned long)s_rx_replies, (unsigned long)s_reply_acks,
+             (unsigned long)s_reply_timeouts,
+             (unsigned long)(s_cmds_tx - last_cmds));
+    for (unsigned i = 0; i < PICTOCHAT_ROOM_CLIENTS; ++i) {
+        const pictochat_peer_t *p = &s_room->peers[i];
+        if (p->connected)
+            ESP_LOGI(TAG, "ROOM aid=%u admitted=%u phase=%u identity=%lu/%lu replay=%u",
+                p->aid, (unsigned)p->admitted, p->session.identity.phase,
+                (unsigned long)p->versions[0], (unsigned long)p->versions[1],
+                (unsigned)p->replay_active);
+        if (p->connected && !p->ghost) {
+            const host_message_rx_t *rx = &p->session.received;
+            ESP_LOGI(TAG, "DRAW RX aid=%u active=%u covered=%u/%u final=%u invalid=%u complete=%u rejected=%lu pending=%u transfer=%u",
+                p->aid, rx->active, rx->covered, rx->total, rx->final_seen,
+                rx->invalid, rx->complete, (unsigned long)rx_rejected[i],
+                p->session.identity.pending, p->session.identity.transfer_size);
+        }
+    }
+    ESP_LOGI(TAG, "TX duration probe: ppdu=%u cmd=%u before_zero=%u after_zero=%u changed=%u",
+             atomic_load_explicit(&s_ppdu_calls, memory_order_relaxed),
+             atomic_load_explicit(&s_ppdu_cmds, memory_order_relaxed),
+             atomic_load_explicit(&s_ppdu_before_zero, memory_order_relaxed),
+             atomic_load_explicit(&s_ppdu_after_zero, memory_order_relaxed),
+             atomic_load_explicit(&s_ppdu_changed, memory_order_relaxed));
+    ESP_LOGI(TAG, "TX late probe: edca=%u cmd=%u zero=%u",
+             atomic_load_explicit(&s_edca_calls, memory_order_relaxed),
+             atomic_load_explicit(&s_edca_cmds, memory_order_relaxed),
+             atomic_load_explicit(&s_edca_zero, memory_order_relaxed));
+    ESP_LOGI(TAG, "TX completion: cmd=%u ack=%u failed=%u rejected=%u trace_drops=%u",
+             atomic_load_explicit(&s_done_cmds, memory_order_relaxed),
+             atomic_load_explicit(&s_done_acks, memory_order_relaxed),
+             atomic_load_explicit(&s_done_fail, memory_order_relaxed),
+             atomic_load_explicit(&s_submit_fail, memory_order_relaxed),
+             atomic_load_explicit(&s_host_trace_drops, memory_order_relaxed));
+    // Diagnostic software timing, not calibrated over-the-air latency.
+    ESP_LOGI(TAG, "RADIO DIAG: closed=%u other=%u invalid=%u last_rssi=%d noise=%d reply_after_submit_us=%d",
+             atomic_load_explicit(&s_reply_closed, memory_order_relaxed),
+             atomic_load_explicit(&s_reply_other, memory_order_relaxed),
+             atomic_load_explicit(&s_reply_invalid, memory_order_relaxed),
+             atomic_load_explicit(&s_reply_rssi, memory_order_relaxed),
+             atomic_load_explicit(&s_reply_noise, memory_order_relaxed),
+             atomic_load_explicit(&s_reply_delay_us, memory_order_relaxed));
+}
+
+static void host_task(void *arg) {
+    uint32_t last_cmds = 0;
+    uint32_t rx_rejected[PICTOCHAT_ROOM_CLIENTS] = {0};
+    int64_t next_stat = 0;
+    uint8_t profile[84];
+    host_build_profile(profile);
     pictochat_room_reset(s_room, profile);
 #if PICTOCHAT_GHOST_DEMO
     uint8_t ghost_profile[84];
@@ -1735,50 +1658,7 @@ static void host_task(void *arg) {
         }
 
         if (now >= next_stat) {                        // ~1s status
-            ESP_LOGI(TAG, "HOST: clients=%u cmds_tx=%lu rx_replies=%lu reply_acks=%lu timeouts=%lu "
-                     "(+%lu cmd/s)", clients, (unsigned long)s_cmds_tx,
-                     (unsigned long)s_rx_replies, (unsigned long)s_reply_acks,
-                     (unsigned long)s_reply_timeouts,
-                     (unsigned long)(s_cmds_tx - last_cmds));
-            for (unsigned i = 0; i < PICTOCHAT_ROOM_CLIENTS; ++i) {
-                const pictochat_peer_t *p = &s_room->peers[i];
-                if (p->connected)
-                    ESP_LOGI(TAG, "ROOM aid=%u admitted=%u phase=%u identity=%lu/%lu replay=%u",
-                        p->aid, (unsigned)p->admitted, p->session.identity.phase,
-                        (unsigned long)p->versions[0], (unsigned long)p->versions[1],
-                        (unsigned)p->replay_active);
-                if (p->connected && !p->ghost) {
-                    const host_message_rx_t *rx = &p->session.received;
-                    ESP_LOGI(TAG, "DRAW RX aid=%u active=%u covered=%u/%u final=%u invalid=%u complete=%u rejected=%lu pending=%u transfer=%u",
-                        p->aid, rx->active, rx->covered, rx->total, rx->final_seen,
-                        rx->invalid, rx->complete, (unsigned long)rx_rejected[i],
-                        p->session.identity.pending, p->session.identity.transfer_size);
-                }
-            }
-            ESP_LOGI(TAG, "TX duration probe: ppdu=%u cmd=%u before_zero=%u after_zero=%u changed=%u",
-                     atomic_load_explicit(&s_ppdu_calls, memory_order_relaxed),
-                     atomic_load_explicit(&s_ppdu_cmds, memory_order_relaxed),
-                     atomic_load_explicit(&s_ppdu_before_zero, memory_order_relaxed),
-                     atomic_load_explicit(&s_ppdu_after_zero, memory_order_relaxed),
-                     atomic_load_explicit(&s_ppdu_changed, memory_order_relaxed));
-            ESP_LOGI(TAG, "TX late probe: edca=%u cmd=%u zero=%u",
-                     atomic_load_explicit(&s_edca_calls, memory_order_relaxed),
-                     atomic_load_explicit(&s_edca_cmds, memory_order_relaxed),
-                     atomic_load_explicit(&s_edca_zero, memory_order_relaxed));
-            ESP_LOGI(TAG, "TX completion: cmd=%u ack=%u failed=%u rejected=%u trace_drops=%u",
-                     atomic_load_explicit(&s_done_cmds, memory_order_relaxed),
-                     atomic_load_explicit(&s_done_acks, memory_order_relaxed),
-                     atomic_load_explicit(&s_done_fail, memory_order_relaxed),
-                     atomic_load_explicit(&s_submit_fail, memory_order_relaxed),
-                     atomic_load_explicit(&s_host_trace_drops, memory_order_relaxed));
-            // Diagnostic software timing, not calibrated over-the-air latency.
-            ESP_LOGI(TAG, "RADIO DIAG: closed=%u other=%u invalid=%u last_rssi=%d noise=%d reply_after_submit_us=%d",
-                     atomic_load_explicit(&s_reply_closed, memory_order_relaxed),
-                     atomic_load_explicit(&s_reply_other, memory_order_relaxed),
-                     atomic_load_explicit(&s_reply_invalid, memory_order_relaxed),
-                     atomic_load_explicit(&s_reply_rssi, memory_order_relaxed),
-                     atomic_load_explicit(&s_reply_noise, memory_order_relaxed),
-                     atomic_load_explicit(&s_reply_delay_us, memory_order_relaxed));
+            host_log_status(clients, rx_rejected, last_cmds);
             last_cmds = s_cmds_tx;
             next_stat = now + 1000000;
         }
