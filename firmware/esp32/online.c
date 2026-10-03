@@ -22,6 +22,7 @@
 #endif
 #include "pictochat/relay_wire.h"
 
+// Relay limits and task-owned state. Shared remote state is guarded by lock.
 #define LINK_PORT 26711
 #ifndef ONLINE_LOCAL_SLOTS
 #define ONLINE_LOCAL_SLOTS 1u
@@ -138,7 +139,7 @@ void online_wifi_configure(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 }
 #endif
-/* ponytail: linear scans over <=15 remotes; index by id if that ever shows up in a profile. */
+/* At most 15 remotes: a bounded linear scan keeps peer lookup simple. */
 static int remote_index(unsigned id) {
     if (id) for (unsigned g=0; g<GHOST_SLOTS; ++g) if (remotes[g].id==id) return (int)g;
     return -1;
@@ -148,6 +149,7 @@ static uint16_t remote_mask(void) {
     for (unsigned g=0; g<GHOST_SLOTS; ++g) if (remotes[g].id) mask|=(uint16_t)(1u<<g);
     return mask;
 }
+// Room callbacks and member synchronization run in the host task.
 void online_message(const pictochat_event_t *event) {
     if (event->type!=PICTOCHAT_MESSAGE_RECEIVED || event->peer_slot>=LOCAL_SLOTS ||
         event->length>HOST_MESSAGE_MAX) return;
@@ -241,6 +243,7 @@ bool online_tick(pictochat_room_t *room) {
 }
 /* Shared by every transport. relay_receive consumes one complete v2 frame;
  * transports without peer ids (LAN/BLE, one peer) pass from_default=1. */
+// Shared relay protocol, independent of the selected transport.
 static bool relay_receive(const uint8_t *wire,size_t bytes,unsigned from_default,int64_t now) {
     unsigned kind,from,to; uint32_t seq; size_t len;
     if (bytes<RELAY_HEADER || !relay_parse_header(wire,&kind,&seq,&from,&to,&len) || bytes!=RELAY_HEADER+len ||
@@ -328,6 +331,7 @@ static void relay_transmit(relay_send_fn send,int64_t now,bool ready) {
     }
 }
 #if !PICTOCHAT_USB && !PICTOCHAT_BLE
+// Direct-LAN transport. BLE and USB implementation fragments are selected below.
 static bool transfer(int fd, void *buf, size_t len, bool sending) {
     uint8_t *p=buf;
     while (len) {
