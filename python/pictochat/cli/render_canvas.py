@@ -15,13 +15,14 @@ import zlib
 
 from pictochat import capture as an
 from pictochat.message import decode
-from pictochat.canvas import detile, write_png
+from pictochat.canvas import PALETTE, detile, detile_indices, write_png
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('pcap')
     parser.add_argument('--all', action='store_true', help='render every complete message')
     parser.add_argument('-o', '--outdir', default='.')
+    parser.add_argument('--colour', action='store_true', help='indexed-colour PNG using the shared palette')
     parser.add_argument('--inpaint', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.inpaint:
@@ -37,7 +38,10 @@ def main():
         path = os.path.join(args.outdir, base + suffix + '.png')
         print(f'message {index}: sender={an.mac(message.sender)}, '
               f'{len(message.bitmap)} bitmap bytes, {message.chunks} captured fragments')
-        write_png(path, detile(message.bitmap))
+        if args.colour:
+            write_png(path, detile_indices(message.bitmap), palette=PALETTE)
+        else:
+            write_png(path, detile(message.bitmap))
 
 
 if __name__ == '__main__':

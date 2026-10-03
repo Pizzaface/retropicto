@@ -136,6 +136,24 @@ static inline bool host_message_next(host_message_tx_t *s, host_id_packet_t *out
     return true;
 }
 
+// Full-height (256x80) message header captured from a real DS send; bytes 8..35 are
+// copied verbatim because their meaning is not yet decoded. Shared with Python via
+// tests/fixtures/drawing-header-full.bin. Smaller canvases need their own template.
+#define HOST_MESSAGE_FULL_BITMAP 10240u
+static const uint8_t host_message_full_header[HOST_MESSAGE_HEADER] = {
+    0x03,0x02,0,0,0,0,0,0,0x00,0x05,0x00,0x00,0x00,0x00,0x03,0x06,0x08,0x0d,
+    0x08,0x0d,0x12,0x1b,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+// Writes the 36-byte header plus a full-height bitmap into body (HOST_MESSAGE_MAX bytes).
+static inline bool host_message_body_full(uint8_t *body, const uint8_t mac[6],
+                                          const uint8_t *bitmap, size_t bitmap_len) {
+    if (bitmap_len != HOST_MESSAGE_FULL_BITMAP) return false;
+    memcpy(body, host_message_full_header, HOST_MESSAGE_HEADER);
+    for (unsigned i = 0; i < 6; ++i) body[2 + i] = mac[i ^ 1];
+    memcpy(body + HOST_MESSAGE_HEADER, bitmap, bitmap_len);
+    return true;
+}
+
 static inline uint32_t host_message_hash(const uint8_t *p, size_t len) {
     uint32_t hash = 2166136261u;
     for (size_t i = 0; i < len; ++i) hash = (hash ^ p[i]) * 16777619u;

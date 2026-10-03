@@ -59,7 +59,9 @@ missing fragments from unrelated messages. `--inpaint` is now an obsolete no-op.
 
 - 256 pixels wide, 4 bits per pixel in row-major 8x8 tiles (32 bytes per tile).
 - Low nibble is the left pixel; zero is blank and nonzero is ink in the
-  monochrome renderer. Colour interpretation remains outside this decoder.
+  monochrome renderer. `pictochat.canvas.detile_indices`/`tile` keep the 0..15
+  index per pixel; `--colour` on the render/export tools writes an indexed PNG
+  with `canvas.PALETTE`, the retropic.to display palette (not DS-verified).
 - Bitmap height follows the announced transfer length after removing 36 bytes
   of metadata; observed complete examples include 16 and 64 pixels. The maximum
   supported bitmap is 256x80 (10,240 bitmap bytes).

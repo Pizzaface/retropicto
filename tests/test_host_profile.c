@@ -34,5 +34,21 @@ int main(void) {
     }
     assert(host_profile_set_bio(profile, u"", 0));
     for (unsigned i = 28; i < 80; ++i) assert(profile[i] == 0);
+
+    // Building the captured identity from scratch reproduces it byte for byte.
+    static const uint8_t mac[6] = {0x00,0x22,0xd7,0x39,0xbc,0xa3};
+    uint8_t built[84];
+    assert(!host_profile_init(built, mac, 16, 7, 16));
+    assert(!host_profile_init(built, mac, 11, 0, 16));
+    assert(host_profile_init(built, mac, 11, 7, 16));
+    assert(host_profile_set_name(built, u"Jordan", 6));
+    assert(host_profile_set_bio(built, u"Can you", 7));
+    assert(memcmp(built, original, 84) == 0);
+    assert(!host_profile_set_name(built, maximum, 11));
+    assert(host_profile_set_name(built, maximum, 10));
+    for (unsigned i = 8; i < 28; i += 2) assert(built[i] == 'Z' && built[i + 1] == 0);
+    assert(!host_profile_set_colour(built, 16) && built[80] == 11);
+    assert(host_profile_set_colour(built, 2) && built[80] == 2);
+    assert(memcmp(built + 81, original + 81, 3) == 0);
     return 0;
 }
