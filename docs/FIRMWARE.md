@@ -110,8 +110,16 @@ pio run -e echo_b -t upload --upload-port /dev/cu.usbmodem21201
 ```
 
 Those are example hub ports; verify chip identities before flashing. The sniffer
-captures the first 64 MP frames per association plus a bounded host-application
-window. Check capture drops and repeated `rx_us` values before using timings;
+captures the first 64 MP frames per association plus a bounded bidirectional
+application window. `sniffer_d_transfer` extends that window to 8192 applications
+on channel 7, plus 65536 other MP frames so ACKs and empty replies remain visible
+during drawings. It uses a **921600-baud console** (upload remains 115200). Record
+at that baud and rejoin D after starting the witness. Both budgets are bounded;
+check for exhausted budgets and malformed records as well as queue drops. Its custom UART defaults
+are in `firmware/esp32/sdkconfig.capture`; existing generated SDK configs must
+also select `CONFIG_ESP_CONSOLE_UART_CUSTOM=y` to honor the higher baud. Verify
+`CONFIG_ESP_CONSOLE_UART_BAUDRATE` in the generated `config/sdkconfig.h`.
+Check capture drops and repeated `rx_us` values before using timings;
 PC timestamps and serial-log prefixes are not over-the-air timing evidence.
 
 ## Runtime heap measurements
@@ -123,6 +131,36 @@ low-water marks), and `internal_largest` (largest available block). Drawing
 allocation failures also log the requested size. Compare idle, joined, and
 repeated drawing transfers; static RAM usage alone excludes runtime Wi-Fi,
 queue, stack, and drawing allocations. These are diagnostics, not a RAM fix.
+
+Standalone host echoes also log `ECHO queued`, `ECHO start`, and `ECHO done`,
+correlated by drawing ID and recipient AID. `queue_ms` measures completed receipt
+until the recipient's sender accepts the echo; `start_wait_ms` measures acceptance
+until its first transmission attempt; `transfer_ms` includes retries and other
+polls until committed completion. `delivered`, `no_reply`, and `failed` count only
+echo-fragment attempts (including announcements); `other_polls` counts that
+recipient's non-echo polls after acceptance. These are software timings, not
+DS display times. Ghost and online sends are not included. Radio settings and
+scheduling are unchanged. Validate a single boot's capture after an echo with
+`python tools/check_echo_timing.py captures_out/<capture>.log`.
+
+`RX REPEAT` reports per-recipient, per-association cumulative accepted application
+counts once per second. `same_payload` counts byte-identical consecutive packets;
+`same_sequence` is the subset also carrying the same two-byte client WM sequence
+footer (before the FCS). Compare counter deltas over a drawing, not identity
+handshake totals. These counters do not deduplicate or change relay behavior.
+
+### Experimental duplicate-relay pacing
+
+`echo_d_paced` adds `HOST_PACE_RELAY_REPEATS=1`; ordinary `echo_d` remains the
+control. Once a drawing relay is delivered, byte-identical repeats with the same
+client WM sequence and association generation are consumed without another relay
+for 100 ms. Radio ACKs are unchanged. New accepted data invalidates the cache;
+failed/no-reply relays and identity handshakes are not suppressed. After 100 ms,
+a retry is allowed because a radio reply does not prove application receipt.
+`RELAY PACING suppressed=...` counts skipped repeats. This is an experimental
+single-DS comparison, not a validated protocol fix or a multi-client guarantee.
+Compare echo times, receive drops, drawing appearance and Send re-enabling with
+the control before enabling it elsewhere.
 
 ## Regression workflow
 

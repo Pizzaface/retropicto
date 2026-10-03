@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+// The delivery witness must retain ACKs/replies past the default 64 frames.
+#define MP_TRACE_FRAMES 128u
 #include "pictochat/mp_trace.h"
 
 static void check_pair(const uint8_t host[6], const uint8_t client[6]) {
@@ -36,6 +38,13 @@ static void check_pair(const uint8_t host[6], const uint8_t client[6]) {
     assert(!mp_trace_select(&s,cmd,23,host));
     while(s.remaining) assert(mp_trace_select(&s,cmd,sizeof cmd,host));
     assert(!mp_trace_select(&s,ack,sizeof ack,host));
+    data_reply[26] = 2; // Client drawing traffic must survive the handshake budget.
+    assert(mp_trace_select(&s,data_reply,sizeof data_reply,host));
+    unsigned client_left = s.app_remaining;
+    data_reply[10] ^= 1;
+    assert(!mp_trace_select(&s,data_reply,sizeof data_reply,host));
+    assert(s.app_remaining == client_left);
+    data_reply[10] ^= 1;
     cmd[30] = 2;
     unsigned app_left = s.app_remaining;
     assert(app_left > 0);
@@ -48,6 +57,7 @@ static void check_pair(const uint8_t host[6], const uint8_t client[6]) {
 }
 
 int main(void) {
+    assert(MP_TRACE_FRAMES == 128u);
     const uint8_t c6[6] = {0,9,0xbf,0xc6,0xc6,0xc6};
     const uint8_t jordan[6] = {0,0x22,0xd7,0x39,0xbc,0xa3};
     const uint8_t ash[6] = {0x64,0xb5,0xc6,0x9c,0x60,0xa0};

@@ -5,9 +5,15 @@
 #include <string.h>
 #include "mp_reply.h"
 
-// Bound USB output to the first 64 MP frames after each successful association.
+// Default: first 64 MP frames after association. Fast delivery witnesses may
+// extend this window to retain ACKs and empty replies during drawing transfers.
 // All lengths include the driver's four-byte capture trailer.
+#ifndef MP_TRACE_FRAMES
 #define MP_TRACE_FRAMES 64u
+#endif
+#ifndef MP_TRACE_APP_FRAMES
+#define MP_TRACE_APP_FRAMES 256u
+#endif
 typedef struct {
     unsigned remaining;
     unsigned app_remaining;
@@ -27,7 +33,7 @@ static inline bool mp_trace_select(mp_trace_t *s, const uint8_t *f, size_t len,
             s->assoc_seq = seq;
             memcpy(s->client, f + 4, 6);
             s->remaining = MP_TRACE_FRAMES;
-            s->app_remaining = 256;
+            s->app_remaining = MP_TRACE_APP_FRAMES;
         }
         return false; // management logger already records this frame
     }
@@ -42,7 +48,9 @@ static inline bool mp_trace_select(mp_trace_t *s, const uint8_t *f, size_t len,
     // Routine heartbeat/ACK traffic must not consume the drawing capture budget.
     bool host_app = host_mp && f[0] == 0x28 && len >= 42 &&
                     (f[30] == 1 || f[30] == 2) && f[31] == 0;
-    if (s->have_assoc && s->app_remaining && host_app) {
+    bool client_app = client_mp && len >= 36 &&
+                      (f[26] == 0 || f[26] == 2) && f[27] == 0;
+    if (s->have_assoc && s->app_remaining && (host_app || client_app)) {
         --s->app_remaining;
         return true;
     }

@@ -18,6 +18,10 @@
 #include "pictochat/handshake_filter.h"
 #include "pictochat/host_sequence.h"
 #include "pictochat/host_identity.h"
+#include "pictochat/host_relay_repeat.h"
+#ifndef HOST_PACE_RELAY_REPEATS
+#define HOST_PACE_RELAY_REPEATS 0
+#endif
 #include "pictochat/host_profile.h"
 #include "pictochat/session.h"
 #include "pictochat/room.h"
@@ -485,8 +489,21 @@ static volatile uint32_t s_cmds_tx = 0;
 static portMUX_TYPE s_admission_lock = portMUX_INITIALIZER_UNLOCKED;
 typedef struct {
     uint32_t generation;
+    uint16_t wm_sequence;
+    uint16_t wifi_sequence, wm_before, wm_after, declared_before, sequence_before;
+    bool ack_changed;
     host_id_packet_t app;
 } host_app_rx_t;
+// Observe consecutive accepted application repeats without suppressing them.
+static struct {
+    host_app_rx_t last;
+    uint32_t packets, announcements, chunks, repeated_payload, repeated_sequence;
+} s_rx_repeat[PICTOCHAT_ROOM_CLIENTS];
+#if HOST_PACE_RELAY_REPEATS
+static host_relay_repeat_t s_relay_repeat[PICTOCHAT_ROOM_CLIENTS];
+static uint16_t s_pending_wm_sequence[PICTOCHAT_ROOM_CLIENTS];
+static uint32_t s_relay_suppressed[PICTOCHAT_ROOM_CLIENTS];
+#endif
 static QueueHandle_t s_host_app_queue[PICTOCHAT_ROOM_CLIENTS];
 static atomic_uint s_host_app_drops;
 #if CONFIG_IDF_TARGET_ESP32
@@ -499,6 +516,7 @@ static pictochat_room_t *const s_room = &s_room_storage;
 #endif
 typedef struct {
     uint32_t id;
+    int64_t received_us;
     pictochat_delivery_t delivery;
     uint16_t len;
     uint8_t announcement[20];
@@ -506,6 +524,11 @@ typedef struct {
 } host_drawing_t;
 static QueueHandle_t s_drawing_ready, s_drawing_dump;
 static uint32_t s_drawings_received, s_drawings_sent, s_drawing_drops;
+// Host-task-only standalone echo diagnostics; never touched by radio callbacks.
+static struct {
+    uint32_t id, token, generation, delivered, no_reply, failed, other_polls;
+    int64_t received_us, queued_us, first_us;
+} s_echo_timing[PICTOCHAT_ROOM_CLIENTS];
 
 // Log complete received drawings outside the radio/host task. The log carries
 // offsets and a checksum so a host-side tool can reject missing serial lines.
@@ -932,12 +955,24 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
             }
             s_rx_replies++;
             host_trace('R', f, (size_t)len - 4, 255, 0);
+            // [DEBUG-rx-reject] Snapshot before ACK to distinguish wire framing
+            // from a buffer change during transmission. Keep queued bytes as-is.
+            uint8_t before_ack[sizeof(((host_id_packet_t *)0)->bytes) + 28];
+            bool snapshot = len >= 36 && len <= 32 + sizeof(((host_id_packet_t *)0)->bytes);
+            if (snapshot) memcpy(before_ack, f, (size_t)len - 4);
             if (send_ack) { host_send_ack(); s_reply_acks++; }
-            if (len >= 36 && len <= 32 + sizeof(((host_id_packet_t *)0)->bytes)) {
+            if (snapshot) {
                 uint16_t kind = f[26] | ((uint16_t)f[27] << 8);
                 uint8_t port = f[25] & 15;
                 if ((kind == 0 && port == 13) || (kind == 2 && port == 14)) {
-                    host_app_rx_t input = {.generation = generation};
+                    host_app_rx_t input = {.generation = generation,
+                        .wm_sequence = host_message_u16(f + len - 6),
+                        .wifi_sequence = host_message_u16(before_ack + 22),
+                        .wm_before = host_message_u16(before_ack + 24),
+                        .wm_after = host_message_u16(f + 24),
+                        .declared_before = host_message_u16(before_ack + 28),
+                        .sequence_before = host_message_u16(before_ack + len - 6),
+                        .ack_changed = memcmp(before_ack, f, (size_t)len - 4) != 0};
                     input.app.len = (uint16_t)(len - 32);
                     memcpy(input.app.bytes, f + 26, input.app.len);
                     if (xQueueSend(s_host_app_queue[slot], &input, 0) != pdTRUE)
@@ -1410,6 +1445,7 @@ static void host_room_event(void *context, const pictochat_event_t *event) {
         host_drawing_t *drawing = malloc(sizeof(*drawing) + event->length);
         if (drawing) {
             drawing->id = s_drawings_received;
+            drawing->received_us = esp_timer_get_time();
             pictochat_room_delivery(room, &drawing->delivery, esp_random());
             drawing->len = (uint16_t)event->length;
             memcpy(drawing->announcement, event->announcement, 20);
@@ -1428,6 +1464,22 @@ static void host_room_event(void *context, const pictochat_event_t *event) {
             (unsigned long)host_message_hash(event->body, event->length),
             (unsigned long)s_drawing_drops);
     } else if (event->type == PICTOCHAT_MESSAGE_SENT) {
+        unsigned slot = event->peer_slot;
+        if (s_echo_timing[slot].id && s_echo_timing[slot].token == event->token &&
+            s_echo_timing[slot].generation == event->generation && event->sender_slot == 0) {
+            int64_t now = esp_timer_get_time();
+            ESP_LOGI(TAG, "ECHO done id=%lu aid=%u queue_ms=%lld start_wait_ms=%lld transfer_ms=%lld total_ms=%lld delivered=%lu no_reply=%lu failed=%lu other_polls=%lu",
+                (unsigned long)s_echo_timing[slot].id, event->aid,
+                (long long)((s_echo_timing[slot].queued_us - s_echo_timing[slot].received_us) / 1000),
+                (long long)((s_echo_timing[slot].first_us - s_echo_timing[slot].queued_us) / 1000),
+                (long long)((now - s_echo_timing[slot].first_us) / 1000),
+                (long long)((now - s_echo_timing[slot].received_us) / 1000),
+                (unsigned long)s_echo_timing[slot].delivered,
+                (unsigned long)s_echo_timing[slot].no_reply,
+                (unsigned long)s_echo_timing[slot].failed,
+                (unsigned long)s_echo_timing[slot].other_polls);
+            s_echo_timing[slot].id = 0;
+        }
         host_log_heap("drawing_sent");
         ++s_drawings_sent;
         ESP_LOGI(TAG, "DRAW outbound TX complete aid=%u sender=%u count=%lu bytes=%u hash=%08lx",
@@ -1494,6 +1546,19 @@ static void host_log_status(unsigned clients,
              atomic_load_explicit(&s_done_fail, memory_order_relaxed),
              atomic_load_explicit(&s_submit_fail, memory_order_relaxed),
              atomic_load_explicit(&s_host_trace_drops, memory_order_relaxed));
+    for (unsigned i = 0; i < PICTOCHAT_ROOM_CLIENTS; ++i) {
+        if (!s_room->peers[i].connected ||
+            s_rx_repeat[i].last.generation != s_room->peers[i].generation) continue;
+        ESP_LOGI(TAG, "RX REPEAT aid=%u packets=%lu announcements=%lu chunks=%lu same_payload=%lu same_sequence=%lu",
+            s_room->peers[i].aid, (unsigned long)s_rx_repeat[i].packets,
+            (unsigned long)s_rx_repeat[i].announcements, (unsigned long)s_rx_repeat[i].chunks,
+            (unsigned long)s_rx_repeat[i].repeated_payload,
+            (unsigned long)s_rx_repeat[i].repeated_sequence);
+#if HOST_PACE_RELAY_REPEATS
+        ESP_LOGI(TAG, "RELAY PACING aid=%u suppressed=%lu",
+            s_room->peers[i].aid, (unsigned long)s_relay_suppressed[i]);
+#endif
+    }
     // Diagnostic software timing, not calibrated over-the-air latency.
     ESP_LOGI(TAG, "RADIO DIAG: closed=%u other=%u invalid=%u last_rssi=%d noise=%d reply_after_submit_us=%d",
              atomic_load_explicit(&s_reply_closed, memory_order_relaxed),
@@ -1561,10 +1626,75 @@ static void host_task(void *arg) {
             peer->admitted = stations[i].admitted;
             host_app_rx_t input;
             while (xQueuePeek(s_host_app_queue[i], &input, 0) == pdTRUE) {
+#if HOST_PACE_RELAY_REPEATS
+                // Radio ACK already happened in promisc_cb. Only pace exact
+                // repeats of a delivered drawing relay; leave new data intact.
+                if (input.generation == peer->generation &&
+                    host_relay_repeat_skip(&s_relay_repeat[i], input.generation,
+                        input.wm_sequence, input.app.bytes, input.app.len, esp_timer_get_time())) {
+                    ++s_relay_suppressed[i];
+                    xQueueReceive(s_host_app_queue[i], &input, 0);
+                    continue;
+                }
+#endif
                 int result = pictochat_room_receive(s_room, i, input.generation,
                                                     input.app.bytes, input.app.len);
                 if (result == -2) break; // retain input until relay/fanout has capacity
-                if (result < 0) ++rx_rejected[i];
+                if (input.ack_changed)
+                    ESP_LOGW(TAG, "[DEBUG-rx-reject] ACK BUFFER CHANGED aid=%u wifi_seq=%u",
+                        peer->aid, input.wifi_sequence);
+                if (result < 0) {
+                    ++rx_rejected[i];
+                    // [DEBUG-rx-reject] Rare rejection-only probe, outside the
+                    // radio callback. Bound output if malformed traffic floods.
+                    if (rx_rejected[i] <= 16 || rx_rejected[i] % 64 == 0) {
+                        char hex[sizeof(input.app.bytes) * 2 + 1];
+                        const char *digits = "0123456789abcdef";
+                        size_t n = input.app.len;
+                        if (n > sizeof(input.app.bytes)) n = sizeof(input.app.bytes);
+                        for (size_t j = 0; j < n; ++j) {
+                            hex[2 * j] = digits[input.app.bytes[j] >> 4];
+                            hex[2 * j + 1] = digits[input.app.bytes[j] & 15];
+                        }
+                        hex[2 * n] = '\0';
+                        const host_identity_t *id = &peer->session.identity;
+                        const host_message_rx_t *rx = &peer->session.received;
+                        ESP_LOGW(TAG, "[DEBUG-rx-reject] aid=%u count=%lu gen=%lu/%lu "
+                            "connected=%u admitted=%u ghost=%u phase=%u announced=%u "
+                            "pending=%u transfer=%u active=%u covered=%u/%u "
+                            "final=%u invalid=%u complete=%u seq=%u len=%u "
+                            "wifi_seq=%u wm_before=%04x wm_after=%04x declared_before=%u "
+                            "seq_before=%u ack_changed=%u hex=%s",
+                            peer->aid, (unsigned long)rx_rejected[i],
+                            (unsigned long)input.generation, (unsigned long)peer->generation,
+                            peer->connected, peer->admitted, peer->ghost, id->phase,
+                            id->announced, id->pending, id->transfer_size, rx->active,
+                            rx->covered, rx->total, rx->final_seen, rx->invalid, rx->complete,
+                            input.wm_sequence, input.app.len, input.wifi_sequence,
+                            input.wm_before, input.wm_after, input.declared_before,
+                            input.sequence_before, input.ack_changed, hex);
+                    }
+                } else {
+#if HOST_PACE_RELAY_REPEATS
+                    s_pending_wm_sequence[i] = input.wm_sequence;
+                    // Invalidate across intervening data/announcements, even
+                    // before their relay commits (tokens aren't in chunks).
+                    s_relay_repeat[i].valid = false;
+#endif
+                    if (s_rx_repeat[i].last.generation != input.generation)
+                        memset(&s_rx_repeat[i], 0, sizeof(s_rx_repeat[i]));
+                    ++s_rx_repeat[i].packets;
+                    if (input.app.bytes[0] == 0) ++s_rx_repeat[i].announcements;
+                    if (input.app.bytes[0] == 2) ++s_rx_repeat[i].chunks;
+                    if (s_rx_repeat[i].last.generation == input.generation &&
+                        s_rx_repeat[i].last.app.len == input.app.len &&
+                        !memcmp(s_rx_repeat[i].last.app.bytes, input.app.bytes, input.app.len)) {
+                        ++s_rx_repeat[i].repeated_payload;
+                        if (s_rx_repeat[i].last.wm_sequence == input.wm_sequence)
+                            ++s_rx_repeat[i].repeated_sequence;
+                    }
+                    s_rx_repeat[i].last = input;
+                }
                 xQueueReceive(s_host_app_queue[i], &input, 0);
             }
         }
@@ -1586,8 +1716,23 @@ static void host_task(void *arg) {
                 queued = true; // export the original rather than wedge the queue
             }
 #else
+            uint16_t pending = drawing->delivery.pending;
             bool queued = pictochat_room_reply(s_room, &drawing->delivery, drawing->announcement,
                                                drawing->body, drawing->len, HOST_SELF_MAC);
+            for (unsigned i = 0; i < PICTOCHAT_ROOM_CLIENTS; ++i) {
+                const pictochat_peer_t *p = &s_room->peers[i];
+                if (!(pending & (1u << i)) || (drawing->delivery.pending & (1u << i)) ||
+                    !p->connected || p->generation != drawing->delivery.generation[i]) continue;
+                memset(&s_echo_timing[i], 0, sizeof(s_echo_timing[i]));
+                s_echo_timing[i].id = drawing->id;
+                s_echo_timing[i].token = drawing->delivery.token;
+                s_echo_timing[i].generation = p->generation;
+                s_echo_timing[i].received_us = drawing->received_us;
+                s_echo_timing[i].queued_us = esp_timer_get_time();
+                ESP_LOGI(TAG, "ECHO queued id=%lu aid=%u queue_ms=%lld",
+                    (unsigned long)drawing->id, p->aid,
+                    (long long)((s_echo_timing[i].queued_us - drawing->received_us) / 1000));
+            }
 #endif
             if (queued) {
                 xQueueReceive(s_drawing_ready, &drawing, 0);
@@ -1601,6 +1746,13 @@ static void host_task(void *arg) {
         if (pictochat_room_prepare(s_room, &slot, &output)) {
             pictochat_peer_t *peer = &s_room->peers[slot];
             bool admitted = peer->admitted;
+            bool timed_echo = s_echo_timing[slot].id &&
+                s_echo_timing[slot].generation == peer->generation;
+            if (timed_echo && output.drawing && !s_echo_timing[slot].first_us) {
+                s_echo_timing[slot].first_us = esp_timer_get_time();
+                ESP_LOGI(TAG, "ECHO start id=%lu aid=%u",
+                    (unsigned long)s_echo_timing[slot].id, peer->aid);
+            }
             // Every CMD, including roster/identity, gets its own reply slot + ACK.
             // Previously identity frames were appended after the heartbeat's ACK,
             // and independent modulo schedules sent orphaned/out-of-order fragments.
@@ -1663,6 +1815,22 @@ static void host_task(void *arg) {
             portENTER_CRITICAL(&s_admission_lock);
             s_cycle_open = false;
             portEXIT_CRITICAL(&s_admission_lock);
+            // Count before finish(): it synchronously emits MESSAGE_SENT.
+            if (timed_echo) {
+                if (!output.drawing) ++s_echo_timing[slot].other_polls;
+                else if (tx_result == PICTOCHAT_TX_DELIVERED) ++s_echo_timing[slot].delivered;
+                else if (tx_result == PICTOCHAT_TX_NO_REPLY) ++s_echo_timing[slot].no_reply;
+                else ++s_echo_timing[slot].failed;
+            }
+#if HOST_PACE_RELAY_REPEATS
+            if (tx_result == PICTOCHAT_TX_DELIVERED && output.application && !output.drawing &&
+                peer->session.identity.phase == HOST_ID_READY &&
+                peer->session.identity.transfer_size > 84 && outgoing.bytes[4] == peer->aid) {
+                s_relay_repeat[slot] = (host_relay_repeat_t){.valid = true,
+                    .generation = peer->generation, .sequence = s_pending_wm_sequence[slot],
+                    .delivered_us = esp_timer_get_time(), .packet = outgoing};
+            }
+#endif
             bool finished = pictochat_room_finish(s_room, tx_result);
             configASSERT(finished);
             (void)finished;
