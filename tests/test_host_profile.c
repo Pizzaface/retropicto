@@ -12,17 +12,20 @@ int main(void) {
     assert(host_profile_set_bio(profile, u"A\u00e9", 2));
     assert(profile[28] == 'A' && profile[29] == 0);
     assert(profile[30] == 0xe9 && profile[31] == 0);
-    for (unsigned i = 32; i < 80; ++i) assert(profile[i] == 0);
+    for (unsigned i = 32; i < 80; ++i)
+        assert(profile[i] == 0);
     assert(memcmp(profile, original, 28) == 0);
     assert(memcmp(profile + 80, original + 80, 4) == 0);
     uint_least16_t maximum[27];
-    for (unsigned i = 0; i < 27; ++i) maximum[i] = 'Z';
+    for (unsigned i = 0; i < 27; ++i)
+        maximum[i] = 'Z';
     assert(host_profile_set_bio(profile, maximum, 26));
-    uint8_t saved[84]; memcpy(saved, profile, 84);
+    uint8_t saved[84];
+    memcpy(saved, profile, 84);
     assert(!host_profile_set_bio(profile, maximum, 27));
     assert(memcmp(saved, profile, 84) == 0);
     assert(host_profile_set_bio(profile, host_profile_bio,
-           sizeof(host_profile_bio) / sizeof(host_profile_bio[0]) - 1));
+                                sizeof(host_profile_bio) / sizeof(host_profile_bio[0]) - 1));
     host_identity_t state;
     host_id_packet_t packet;
     host_identity_reset(&state, 1, 2);
@@ -33,6 +36,7 @@ int main(void) {
         assert(memcmp(packet.bytes + 40, profile + 28, 52) == 0);
     }
     assert(host_profile_set_bio(profile, u"", 0));
-    for (unsigned i = 28; i < 80; ++i) assert(profile[i] == 0);
+    for (unsigned i = 28; i < 80; ++i)
+        assert(profile[i] == 0);
     return 0;
 }

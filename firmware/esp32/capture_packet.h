@@ -15,14 +15,26 @@
 #define WLAN_ADDR3_OFF 16 // BSSID (usually)
 
 // Frame Control decode helpers.
-static inline uint8_t fc_type(const uint8_t *f) { return (f[0] >> 2) & 0x3; }
-static inline uint8_t fc_subtype(const uint8_t *f) { return (f[0] >> 4) & 0xF; }
-static inline bool fc_to_ds(const uint8_t *f) { return f[1] & 0x01; }
-static inline bool fc_from_ds(const uint8_t *f) { return f[1] & 0x02; }
+static inline uint8_t fc_type(const uint8_t *f) {
+    return (f[0] >> 2) & 0x3;
+}
+
+static inline uint8_t fc_subtype(const uint8_t *f) {
+    return (f[0] >> 4) & 0xF;
+}
+
+static inline bool fc_to_ds(const uint8_t *f) {
+    return f[1] & 0x01;
+}
+
+static inline bool fc_from_ds(const uint8_t *f) {
+    return f[1] & 0x02;
+}
 
 // Length of the 802.11 MAC header for a given frame (handles addr4 + QoS).
 static size_t wlan_header_len(const uint8_t *f, size_t len) {
-    if (len < 24) return len;
+    if (len < 24)
+        return len;
     size_t hdr = 24;
     uint8_t type = fc_type(f);
     if (type == 2 /* data */ && fc_to_ds(f) && fc_from_ds(f)) {
