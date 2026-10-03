@@ -24,6 +24,25 @@ int main(void) {
     f = fopen("tests/fixtures/send-message.bin", "rb"); assert(f);
     size_t total = fread(expected, 1, sizeof(expected), f); fclose(f);
     assert(total == 2084 && n > 13);
+
+    // Full-height body builder matches the shared header fixture used by Python.
+    {
+        static uint8_t body[HOST_MESSAGE_MAX], bitmap[HOST_MESSAGE_FULL_BITMAP], fixture[36];
+        f = fopen("tests/fixtures/drawing-header-full.bin", "rb"); assert(f);
+        assert(fread(fixture, 1, 36, f) == 36 && fgetc(f) == EOF); fclose(f);
+        assert(memcmp(fixture, host_message_full_header, 36) == 0);
+        for (unsigned i = 0; i < sizeof(bitmap); ++i) bitmap[i] = (uint8_t)i;
+        static const uint8_t mac[6] = {0x00,0x22,0xd7,0x39,0xbc,0xa3};
+        assert(!host_message_body_full(body, mac, bitmap, 1024));
+        assert(host_message_body_full(body, mac, bitmap, sizeof(bitmap)));
+        assert(body[0] == 3 && body[1] == 2);
+        assert(memcmp(body + 2, "\x22\x00\x39\xd7\xa3\xbc", 6) == 0);
+        assert(memcmp(body + 8, fixture + 8, 28) == 0);
+        assert(memcmp(body + 36, bitmap, sizeof(bitmap)) == 0);
+        host_message_rx_t check; host_message_reset(&check);
+        uint8_t ann[20] = {0, 0, 20, 0, 1, 0, 0xff, 0xff, (uint8_t)HOST_MESSAGE_MAX, HOST_MESSAGE_MAX >> 8};
+        assert(host_message_receive(&check, ann, 20) == 0 && check.active && check.total == HOST_MESSAGE_MAX);
+    }
     unsigned first_data = 0;
     while (first_data < n && packets[first_data].bytes[0] != 2) ++first_data;
     assert(first_data < n);

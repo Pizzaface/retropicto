@@ -168,6 +168,20 @@ Drawing bodies contain 36 metadata bytes plus 1..10 tile rows of 1024 bytes, at 
 overlap cannot complete a drawing. Duplicate final packets must not emit twice.
 Identity bodies are 84 bytes; Bio accepts at most 26 UTF-16 code units.
 
+## Building host payloads
+
+Do not copy captured magic bytes into adapters. `host_profile.h` builds the 84-byte
+identity (`host_profile_init` for type/MAC/colour/birthday, then `set_name`, `set_bio`,
+`set_colour`); `host_message_body_full` writes the full-height 36-byte message header
+plus a 10240-byte bitmap. Python mirrors both in `pictochat.drawing` (`profile`,
+`message_body`, `announcement`, `state_payload`, `drawing_payload`, `drawing_bitmap`)
+and `pictochat.canvas` converts between tile rows and palette-index grids (`tile`,
+`detile_indices`; `write_png(..., palette=PALETTE)` keeps colour). Both languages
+compare their header against `tests/fixtures/drawing-header-full.bin` and the captured
+identity vector, so a layout change in one language fails the other's test. Header
+bytes 8..35 of the full-height message are still undecoded: smaller canvases must pass
+a captured template.
+
 Smaller header modules are independently usable: identity, message, sequence,
 profile, poll fields, admission/reply filtering and tracing. `ack_gate.h` is an
 optional C11 atomic helper for concurrent adapters; the engine uses no atomics.
