@@ -1,69 +1,91 @@
 # USB PictoChat bridge
 
-Each C6 owns its DS radio connection. The computer forwards complete profiles,
-drawings and acknowledgment frames over USB, leaving the radio on its room's
-working channel. No Wi-Fi credentials or router configuration are needed.
+The `esp32c6usb` build ("Relay") owns one DS room over its own radio and
+exchanges PCTR v2 relay frames with whatever is on the other end of its native
+USB Serial/JTAG port. In production that is the RetroPicto Android app
+(`../retropicto-android`), which carries frames to other phones over MLS. The
+two-PC `tools/usb_bridge.py` setup further down is the bench/dev path only.
+No Wi-Fi credentials or router configuration are used in this build.
 
-| Board | Port | PictoChat room | Radio channel | Host name |
-| --- | --- | --- | --- | --- |
-| A | COM5 | A | 1 | RELAY A |
-| B | COM12 | B | 7 | RELAY B |
+## Phone cable (production)
 
-The common `esp32c6usb` image selects A/B from the two bench boards' factory
-MACs in `online_wifi_configure()`. Unknown boards refuse startup. This mapping
-must be changed for replacement hardware; see the [board assignment instructions](../README.md#1-assign-your-boards-before-flashing). Each board admits
-`ONLINE_LOCAL_SLOTS` physical DS consoles; every remote DS is installed as a
-virtual participant (ghost) using its actual profile, one ghost slot per remote
-peer id, AIDs assigned downward from 15.
-The local echo bot is disabled. Drawing attribution is rewritten by the existing
-ghost API, without changing the bitmap. USB code reuses the online bridge's room
-ownership, bounded queues, generation checks, and duplicate suppression.
+The phone opens the C6 as a plain CDC bulk pipe (VID `0x303a`, PID `0x1001`).
+It sets DTR|RTS once on open and never toggles them, so the board is not reset;
+only the in-app flasher performs the esptool reset dance. All traffic is ASCII
+lines terminated by `\n` (`\r` ignored). Both sides prefix every line they send
+with `\n` so a half-written line is discarded and the parser resynchronises.
+Lines longer than the PCTR maximum are dropped up to the next newline.
 
-## Same computer trial
+### Room selection
 
-Run PlatformIO operations sequentially, with automatic cleanup disabled:
+The USB build has no MAC → board mapping (that code is LAN-build only,
+`online.c` `#if !PICTOCHAT_USB && !PICTOCHAT_BLE`). At boot it reads NVS
+namespace `picto`, key `room` (u8, 1..4 = A..D). If absent it uses
+`PICTOCHAT_NODE`, which `esp32c6usb` does not define, so **any board, known or
+unknown, starts as room A / channel 1 until `@ROOM` is sent**. Channels are
+fixed per room: A=1, B=7, C=13, D=7. The app's flasher skips the NVS region
+(`0x9000`–`0xF000`), so the saved room survives firmware updates; a full erase
+or a merged-image write over that region resets it to A.
 
-```powershell
-pio run --disable-auto-clean -e esp32c6usb
-pio run --disable-auto-clean -e esp32c6usb -t upload --upload-port COM12
-pio run --disable-auto-clean -e esp32c6usb -t upload --upload-port COM5
-python tools/usb_bridge.py --ports COM12 COM5 --reset
-```
+### Control lines
 
-Install the serial dependency with `python -m pip install pyserial`. Close serial monitors first: each port must have one owner. `--reset` captures a
-clean startup; omit it to attach without resetting the current DS sessions.
-Ctrl-C stops the bridge. `--seconds 240` limits a recording. The tool saves
-firmware logs and forwarding summaries under `captures_out/<date>/usb-bridge-*`.
+| Line | Direction | Effect | Response |
+| --- | --- | --- | --- |
+| `@INFO?` | phone → C6 | Request status. | `@INFO room=<A-D> channel=<n> local=<ONLINE_LOCAL_SLOTS> ghosts=<GHOST_SLOTS> build=<16 hex>` |
+| `@INFO room=…` | C6 → phone | Also sent unprompted once at boot. `build` = first 8 bytes of `app_elf_sha256`, lowercase hex. There is no version field; the app gets the version from the service's `/firmware/esp32c6.json`. | — |
+| `@OPEN` | phone → C6 | Advertise the DS room (PictoChat beacon vendor IE) for 10 s from receipt. | none |
+| `@CLOSE` | phone → C6 | Stop advertising immediately; removes the IE and deauthenticates every connected DS. | none |
+| `@ROOM <A-D>` | phone → C6 | Save room to NVS, then reboot ~200 ms later. Applies on the next boot. | `@ROOM OK` or `@ROOM FAIL` (NVS error, no reboot). Any other letter is silently ignored. |
+| `@PCTR <hex>` | both | One PCTR v2 frame, header + payload hex-encoded (either case accepted by C6; C6 emits lowercase). | none; invalid frames are dropped silently |
+| anything else | C6 → phone | ESP-IDF log rows. Never forwarded; the app logs them. Rows are bounded (256 B) and may be dropped under load. | — |
 
-Wait for `USB relay ready` and `USB peer connected` from both boards. Then join
-Room A on one DS and Room B on the other. Each room should show RELAY A/B and
-the remote DS's name once both identities complete. Send a drawing each way and
-verify both attribution and bitmap. Test overlapping sends and leaving/rejoining.
-Stopping the PC bridge should remove remote ghosts after about six seconds;
-restarting it should restore current remote membership without rebooting either
-C6. Messages sent while disconnected can be dropped; there is no offline history.
+Commands must match exactly (`@OPEN`, not `@OPEN ` or `@open`). Matching is on
+the whole line after newline/CR stripping.
 
-`Accepted remote drawing` means queued for the local DS. `Peer consumed drawing`
-means acknowledged by the receiving bridge. `DRAW outbound TX complete` means
-the DS radio transfer completed. Only the DS screen confirms correct display.
+The room is closed at boot. The app sends `@OPEN` every 3 s while its MLS room
+reports `Online`, and `@CLOSE` when it goes offline, is kicked, or the user
+disconnects. If the app dies or the cable is pulled, the room closes on its
+own within 10 s of the last `@OPEN`. Room visibility does not stop the relay:
+the C6 keeps sending state heartbeats over USB either way.
 
-## Two computers
+### PCTR frames over the cable
 
-The same tool can forward between one USB port and a TCP connection:
+C6 → phone: `from` = local DS slot (0..`ONLINE_LOCAL_SLOTS`-1) for state and
+drawings; ACKs are sent with `from` = 0 and `to` = the remote peer id that sent
+the drawing. Each local slot sends a state frame every second and on change,
+including empty slots (generation 0).
 
-```powershell
-# Computer A: listener is loopback-only in this example.
-python tools/usb_bridge.py --port COM12 --listen 127.0.0.1:26712
-# Computer B: connect via an already-established SSH port forward to A.
-python tools/usb_bridge.py --port COM5 --connect 127.0.0.1:26712
-```
+Phone → C6: the app keys each remote participant as
+`(sourcePhoneId, remote from)`, assigns peer ids 1, 2, 3… in first-seen order
+(never reused within a bridge session), rewrites `from` to that id and `to` to
+0, and leaves payload and checksum unchanged. `from` = 0 is rejected by the C6.
+A `leave` for an unknown key is not forwarded.
 
-For a private LAN, use A's LAN address in both `--listen` and `--connect` as
-appropriate. This TCP stream has no built-in authentication or encryption; use
-an authenticated SSH tunnel for separate networks, not an exposed public port.
-Setting up that tunnel is separate from the local bench test. A socket/serial
-failure stops the process and lets firmware heartbeat expiry remove the peer;
-restart the tool after reconnecting. It does not reconnect automatically.
+Peer lifetime on the C6: a peer gets a remote entry on its first valid state
+frame and expires 6 s after its last state frame, or immediately on `leave`
+(kind 4, empty payload). When the app stops it sends `@CLOSE` to its own C6 and
+`leave` for slots 0–3 to the other phones. Drawings are resent every 4 s with
+the same sequence until every live remote entry has ACKed, then dropped after
+30 s. Neither the app nor the bench tool invents ACKs.
+
+### Slots and ghosts
+
+`esp32c6usb` builds with `PICTOCHAT_ROOM_CLIENTS=6` and `ONLINE_LOCAL_SLOTS=2`
+(`platformio.ini`), so each Relay hosts 2 physical DS consoles and
+`GHOST_SLOTS` = 4 remote entries. Physical consoles take radio AIDs counting up
+from 1; ghosts take AIDs counting down from 15. A remote DS is shown as a ghost
+using its real profile, and drawing attribution is rewritten via the ghost API
+without changing the bitmap. A remote entry is consumed by every remote peer id
+that sends state, including empty remote slots (generation 0), so 4 entries
+cover two remote Relays, not four remote consoles. A 5th peer is refused
+(`Remote <id> refused: no free ghost slot`). Each room slot costs about 24 KB
+static RAM; the local echo bot is disabled in this build.
+
+Useful log rows: `USB relay ready`, `Remote <id> connected`, `Remote <id>
+installed as ghost`, `Accepted remote <id> drawing` (queued for the local DS),
+`Remote <id> consumed drawing` (ACK received), `DRAW outbound TX complete`
+(DS radio transfer done), `room open` / `room closed`. Only the DS screen
+confirms correct display.
 
 ## Framing and radio isolation
 
@@ -72,7 +94,7 @@ uint16 length, uint32 sequence, uint32 FNV-1a payload checksum, uint16 `from`,
 uint16 `to`) and bounded state/drawing/ACK/leave payloads. Board→bridge, `from`
 is the local DS slot and `to` is a remote peer id or 0 for all. Bridge→board,
 `from` is a nonzero peer id the bridge assigns per remote participant and `to`
-is a local slot or 0. `leave` (kind 4, empty) removes a peer immediately;
+is a local slot or 0 (the C6 ignores `to`). `leave` (kind 4, empty) removes a peer immediately;
 otherwise a peer expires six seconds after its last state heartbeat. A drawing
 is retried every four seconds until every live peer has ACKed it, and dropped
 after 30 seconds. `usb_bridge.py` is single-peer: it stamps the far board as
@@ -91,12 +113,70 @@ use the same sequence number. Each room slot costs about 24 KB of static RAM
 for local consoles plus ghosts must be found on hardware. Incoming state heartbeats refresh peer liveness.
 Room mutation happens only in the existing radio-owner task.
 
+## Bench setup: PC bridge (dev only)
+
+> **Currently broken.** `tools/usb_bridge.py` never sends `@OPEN`, so both
+> Relays keep their DS rooms hidden and no console can join. It also stamps
+> every forwarded frame `from=1`, so with `ONLINE_LOCAL_SLOTS=2` both far-side
+> slots overwrite one remote entry. Both boards also start as room A until
+> `@ROOM B` is sent to one of them. Use the phone path, or fix the script first.
+
+### Same computer trial
+
+Run PlatformIO operations sequentially, with automatic cleanup disabled:
+
+```powershell
+pio run --disable-auto-clean -e esp32c6usb
+pio run --disable-auto-clean -e esp32c6usb -t upload --upload-port COM12
+pio run --disable-auto-clean -e esp32c6usb -t upload --upload-port COM5
+python tools/usb_bridge.py --ports COM12 COM5 --reset
+```
+
+Install the serial dependency with `python -m pip install pyserial`. Close serial monitors first: each port must have one owner. `--reset` captures a
+clean startup; omit it to attach without resetting the current DS sessions.
+Ctrl-C stops the bridge. `--seconds 240` limits a recording. The tool saves
+firmware logs and forwarding summaries under `captures_out/<date>/usb-bridge-*`.
+
+Wait for `USB relay ready` and `Remote 1 connected` from both boards. Then join
+Room A on one DS and Room B on the other. Each room should show RELAY A/B and
+the remote DS's name once both identities complete. Send a drawing each way and
+verify both attribution and bitmap. Test overlapping sends and leaving/rejoining.
+Stopping the PC bridge should remove remote ghosts after about six seconds;
+restarting it should restore current remote membership without rebooting either
+C6. Messages sent while disconnected can be dropped; there is no offline history.
+
+Log row meanings are listed under [Slots and ghosts](#slots-and-ghosts).
+
+### Two computers
+
+The same tool can forward between one USB port and a TCP connection:
+
+```powershell
+# Computer A: listener is loopback-only in this example.
+python tools/usb_bridge.py --port COM12 --listen 127.0.0.1:26712
+# Computer B: connect via an already-established SSH port forward to A.
+python tools/usb_bridge.py --port COM5 --connect 127.0.0.1:26712
+```
+
+For a private LAN, use A's LAN address in both `--listen` and `--connect` as
+appropriate. This TCP stream has no built-in authentication or encryption; use
+an authenticated SSH tunnel for separate networks, not an exposed public port.
+Setting up that tunnel is separate from the local bench test. A socket/serial
+failure stops the process and lets firmware heartbeat expiry remove the peer;
+restart the tool after reconnecting. It does not reconnect automatically.
+
+## History
+
+The log below records the September 2026 two-PC bring-up. Board/port roles,
+the MAC-based A/B selection and `USB peer connected` it mentions are obsolete;
+see [Room selection](#room-selection).
+
 The old `wifi.local.json` diagnostic settings do not affect this environment.
 The temporary changes to `esp32c6ghost` (APSTA, alternate address, Room A, passive
 observer) were removed; that environment is once again the local AP-only Room B
 GHOST demonstration. Saved diagnostic binaries remain in `captures_out`.
 
-## Validation
+### Validation
 
 `python tests/test_usb_bridge.py` passes wire-size/checksum rejection, fragmented
 and oversized stream recovery, and bidirectional socket forwarding without
@@ -118,7 +198,7 @@ claim is made. Firmware remains unchanged for the swap.
 Console-swap result: only A still works; COM12 admitted the second console
 (`00:22:d7:39:bc:a3`) at 19:31:01. Next test swaps board roles in the common
 USB image: **COM12 = B/channel 7/d2, COM5 = A/channel 1/d1**. This temporary
-mapping supersedes the table above until the diagnosis is complete.
+mapping was used for the rest of the trial.
 
 The swapped-role trial enabled Send on both DS consoles. The user sent drawings
 in both directions but neither appeared remotely. Capture
