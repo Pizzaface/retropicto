@@ -165,57 +165,16 @@ Setting up that tunnel is separate from the local bench test. A socket/serial
 failure stops the process and lets firmware heartbeat expiry remove the peer;
 restart the tool after reconnecting. It does not reconnect automatically.
 
-## History
+## Implementation notes
 
-The log below records the September 2026 two-PC bring-up. Board/port roles,
-the MAC-based A/B selection and `USB peer connected` it mentions are obsolete;
-see [Room selection](#room-selection).
-
-The old `wifi.local.json` diagnostic settings do not affect this environment.
-The temporary changes to `esp32c6ghost` (APSTA, alternate address, Room A, passive
-observer) were removed; that environment is once again the local AP-only Room B
-GHOST demonstration. Saved diagnostic binaries remain in `captures_out`.
-
-### Validation
-
-`python tests/test_usb_bridge.py` passes wire-size/checksum rejection, fragmented
+`python tests/test_usb_bridge.py` covers wire-size/checksum rejection, fragmented
 and oversized stream recovery, and bidirectional socket forwarding without
-invented acknowledgments. C framing uses the existing tested `relay_wire.h`.
-The USB firmware build passed (185,216 bytes static RAM; 889,152 bytes code)
-and both COM12 and COM5 flashed with verified hashes. At 19:27:21 on September
-24 both boards logged `USB peer connected`; startup confirmed A/channel 1 and
-B/channel 7. Capture: `captures_out/2026-09-24/usb-bridge-192720-034338.log`.
-The two-DS display/drawing trial is in progress.
+invented acknowledgments. C framing uses the tested `relay_wire.h`.
 
-Initial two-console trial: Room A works, but the user reports Send disabled and
-no users in Room B. COM5 associates with DS `00:22:d7:39:bc:a3` but receives no
-MP replies and remains unadmitted. COM12 admits `64:b5:c6:9c:60:a0`. USB forwards
-A's profile and COM5 installs its remote ghost, so profile transport is functioning
-while B's local radio admission fails. A console-swap test is pending to separate
-a console-specific issue from the COM5/Room B path. No bidirectional delivery
-claim is made. Firmware remains unchanged for the swap.
-
-Console-swap result: only A still works; COM12 admitted the second console
-(`00:22:d7:39:bc:a3`) at 19:31:01. Next test swaps board roles in the common
-USB image: **COM12 = B/channel 7/d2, COM5 = A/channel 1/d1**. This temporary
-mapping was used for the rest of the trial.
-
-The swapped-role trial enabled Send on both DS consoles. The user sent drawings
-in both directions but neither appeared remotely. Capture
-`captures_out/2026-09-24/usb-bridge-193447-027934.log` shows both physical peers
-READY and both remote ghosts installed. Local drawing fragment echoes are present,
-but no completed drawing was queued or forwarded over USB. Added per-second
-`DRAW RX` assembly status (coverage, total, final, invalid, complete, rejected)
-to distinguish missing fragments from validation failures on the next trial.
-The role mapping remains COM5=A and COM12=B.
-
-The isolated A-to-B drawing trial completed assembly at 19:41:44 (10,276 bytes,
-full coverage, no validation failures) and queued sequence 1. No drawing frame
-reached the PC. The installed ESP-IDF USB driver uses one atomic ring-buffer
-submission per write call; the firmware submitted a 20,648-byte drawing line to
-its 4,096-byte TX ring. Changed `usb_write` to submit at most 1,024 bytes per call,
-retaining partial-write handling. PC bridge tests pass (3 tests). Display delivery
-still requires the next physical trial. Diagnostic capture:
-`captures_out/2026-09-24/usb-bridge-193855-211554.log`.
-
-The final USB trial was confirmed by the user in both directions with correct sender attribution. The subsequent BLE/PC/phone experiment has been removed from the tree (see git history).
+The ESP-IDF USB Serial/JTAG driver makes one atomic ring-buffer submission per
+write call, so a 20,648-byte drawing line never fit its 4,096-byte TX ring and no
+drawing reached the PC. `usb_write` therefore submits at most 1,024 bytes per
+call, retaining partial-write handling. With that fix, drawings were delivered in
+both directions with correct sender attribution. Per-second `DRAW RX` assembly
+status (coverage, total, final, invalid, complete, rejected) distinguishes missing
+fragments from validation failures.

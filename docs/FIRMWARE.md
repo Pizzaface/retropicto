@@ -72,12 +72,10 @@ tool's `--help` for output/interface options.
 
 `echo_a`, `echo_b`, `echo_c`, and `echo_d` run the existing standalone PICTOBOT
 with room IDs 0–3 on channels A=1, B=7, C=13, D=7 (B and D share channel 7).
-A on channel 7 was invisible to the DS. C/channel 13 was
-hardware-confirmed on September 28: a 10,276-byte drawing echoed correctly and
-Send re-enabled, with a paired passive WROOM capture. D/channel 7 was also
-user-confirmed on September 28: drawing echo displayed and Send re-enabled,
-without a power cycle after the final flash. All four trials retain 2 Mbps long
-preamble. Do not assume arbitrary room/channel pairs work.
+A on channel 7 was invisible to the DS. All four pairs are hardware-confirmed:
+drawing echo displays and Send re-enables (C/channel 13 with a 10,276-byte drawing
+and a paired passive WROOM capture; D/channel 7 without a power cycle after the
+final flash). All four use 2 Mbps long preamble. Do not assume arbitrary room/channel pairs work.
 
 An intermittent failure remains unresolved: on both B and D, the host reported
 CMD completions while the WROOM saw ACKs but no CMD polls or DS replies. B
@@ -192,8 +190,7 @@ examines independent sniffer records. Write captures and exports to `captures_ou
 which is ignored. Only intentional regression inputs belong in `tests/fixtures/`.
 
 [Drawing evidence](DRAWING_TRANSFER.md), [identity evidence](IDENTITY_EXCHANGE.md),
-and [historical radio notes](RADIO_NOTES.md) document earlier trials. Their removed
-experimental snapshots are not current build inputs.
+and [historical radio notes](RADIO_NOTES.md) document earlier trials.
 
 Application reactions live in `host_room_event`: receive events copy a drawing
 into the echo queue; sent events update completion counters. Add custom behavior

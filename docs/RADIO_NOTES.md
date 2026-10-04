@@ -1,7 +1,6 @@
 # Historical ESP32 radio notes
 
-> Historical captures and build snapshots referenced below were removed during
-> cleanup. Protocol code now lives in `lib/pictochat`; see [the library guide](LIBRARY.md).
+> Protocol code now lives in `lib/pictochat`; see [the library guide](LIBRARY.md).
 
 Watch the wireless traffic between two Nintendo DS consoles running **PictoChat**
 using an **ESP32-WROOM**. The ESP32 captures the raw 802.11 frames the DS uses
@@ -113,15 +112,12 @@ start USB recording on COM6, enter Room B on Jordan first, then join with Ash
 `-D SERIAL_TRACE_JORDAN=1` from that environment and rebuild/flash WROOM to restore
 the C6 target; neither setting changes the C6 host's identity or firmware.
 
-The September 22 reference `real-ds-jordan-host-175637-COM6.log` captured a working
-Jordan-host/Ash-client startup after explicitly powering Ash off until Jordan was
-in Room B. The first attempt instead had Ash as host and did not arm the Jordan
-MP filter. The successful window contains 64 MP frames (29 CMD, 28 CMD-ACK,
-one empty reply, six body-bearing replies), with zero reported queue drops.
-Ash sends type 6 after a granted type-5 CMD, followed by Jordan's type-4 roster;
-the user confirmed messages both ways. Granted CMD Duration is `0x04e0`, ungranted
-is `0x00f0`; the C6 trace has zero. These are comparisons, not established causes.
-RX timestamps still repeat in this working real-DS exchange: do not infer latency.
+A working real-DS reference (Jordan host, Ash client, with Ash powered off until
+Jordan is in Room B) shows 64 startup MP frames: 29 CMD, 28 CMD-ACK, one empty
+reply, and six body-bearing replies. Ash sends type 6 after a granted type-5 CMD,
+followed by Jordan's type-4 roster. Granted CMD Duration is `0x04e0`, ungranted
+is `0x00f0`. RX timestamps repeat even in this working exchange: do not infer
+latency.
 
 After a successful association response from the selected host, up to 64 `MP` frames
 (polls, replies, CMD-ACKs) are queued with full hex and RX timestamps. Duplicate
@@ -133,64 +129,6 @@ host CMD, empty reply, and body-bearing reply counts every five seconds. Reply
 payload byte counts exclude the trailer. This is not a full PCAP replacement.
 Restore UDP streaming with `pio run -e esp32dev -t upload --upload-port COM6`.
 The C6 host firmware is not changed by flashing the WROOM.
-
-The admission-gated C6 experiment now waits on type-5 polls until a complete,
-validated type-6 reply arrives from the associated client. It then sends seven
-type-4 roster polls (matching this reference sample, not a proven required count)
-before the existing ordered identity sequence. A short critical section protects
-admission state and client identity; ACK transmission and logging stay outside it.
-The parser accepts the observed 108-byte payload with declared size `0x0068` and
-excludes the four-byte capture trailer. The admission-only trial
-`mp-trace-200521-COM6.log` recorded 40,993 polls and 3,824 empty replies with no
-body-bearing replies; no C6 disconnect was logged during the ten-minute capture.
-The first 64 MP frames were one empty poll plus 31 type-5 polls and 32 ACKs, with
-zero reported queue drops. Jordan stayed connected but had no PICTOBOT or Send.
-No admission occurred, so the gated identity exchange did not run.
-
-The next isolated grant-policy experiment grants the first typed poll after each
-join and toggles WM on every typed poll independently of grants. It preserves
-one-in-three grant cadence (polls 1, 4, 7, ...), rather than exactly replaying the
-reference's first/fifth grants. The initial empty poll does not advance this state.
-This applies to type-5/type-4 polls; identity-frame builders remain unchanged.
-Duration handling, ACK delay, admission gating, trailer counter and application
-payload are unchanged. In `mp-trace-105726-COM6/COM12.log` (September 24 timestamps),
-the first type-5 grant and independent low/high WM toggles were verified on air.
-Jordan remained connected during the observation but sent only empty replies;
-PICTOBOT and Send did not appear.
-
-A separate C6-only TX Duration diagnostic wraps `hal_mac_tx_set_ppdu` without
-changing frames. The final linked ELF confirms `lmacSetTxFrame` calls the IRAM
-wrapper, which calls the original setup function. In `mp-trace-115130-COM6/COM12.log`
-(September 24 timestamps), the probe saw 9,745 CMD frames with nonzero Duration
-both before and after setup (`before_zero=0`, `after_zero=0`, `changed=0`), while
-all 31 sampled on-air CMDs had Duration zero. WROOM counted 8,540 CMDs, 481 empty
-replies, and zero data replies; C6 recorded 481 replies in its own window. These
-counter windows differ and should not be equated. This localizes the discrepancy
-to after the observed setup point or to an alternate transmitted representation;
-it does not prove a silicon limitation or that Duration alone gates admission.
-The USB capture was stopped deliberately after 147 seconds, so its process exit
-code 1 does not indicate a firmware or capture-format error.
-
-September 24 follow-up: `captures_out/2026-09-24/edca-repeat-121635-971785-*`
-extends the read-only probe to the linked `hal_mac_tx_config_edca` call, after
-PPDU setup and before queue enable. It counted 8,351 CMDs with nonzero header
-Duration there; all 95 sampled WROOM CMDs had zero Duration and queue drops were
-zero. No body-bearing replies were observed. The first diagnostic boot failed
-to associate; the previous binary and a repeat of the identical diagnostic both
-associated, so that initial failure was not reproducible. User confirmed room B,
-no PICTOBOT, and disabled Send with the restored previous firmware.
-
-`nav-active-121919-637860-*` then wrote the ROM-derived Duration register
-(`0x600a54c0 - queue*116`) from that verified hook, saving/restoring each queue's
-prior value. All 2,229 CMD writes read back correctly on queue 0, but all 17
-sampled on-air CMDs still had Duration zero. C6 saw zero replies while WROOM
-continued counting empty replies. The mutation was **reverted in source and on
-the board**; `edca-restored-122009-839635-*` confirms C6 reception recovered
-(86 replies / 2,094 CMDs). These experiments narrow the transmit discrepancy;
-they do not prove Duration is the admission blocker. The current firmware keeps
-only the read-only PPDU/EDCA probes. Experimental binaries/sources are archived
-under the dated capture directory. Deliberately interrupted capture processes
-exit 1; their line-buffered logs remain usable.
 
 Capture both boards with `python tools/capture_serial.py --seconds 120 --label trial`.
 It records each port independently under the actual date; `--ports COM12` selects
@@ -208,92 +146,46 @@ and empty/body-bearing replies for both C6/Jordan and Jordan/Ash MAC pairs.
 The ACK ownership test uses C11 atomics and pthreads:
 `gcc -std=c11 -Wall -Wextra -Werror -pthread -I lib/pictochat/include tests/test_ack_gate.c -o build/test_ack_gate`.
 
-The experimental `esp32c6host` mode now gives each roster, heartbeat, or identity
-CMD its own reply/ACK cycle. Each join resets the identity schedule; announcements
-and the two profile stages no longer run on independent modulo counters.
-September 22 hardware testing showed PICTOBOT rendering on Ash and Jordan, but
-Send remained disabled and connection errors followed. Rendering is only a partial
-result; the full session and Send path are not working yet.
-The next isolated experiment changes the six startup polls from type 4 to type 5,
-following an empty poll, with the later identity sequence and all other fields
-unchanged. Working captures show type 5 before client type-6 admission, then type 4.
-The September 22 type-5-first test still rendered PICTOBOT and then disconnected
-on Jordan (two joins, approximately 6.1 and 6.7 seconds). In the first join, WROOM
-observed 436 host polls and three empty replies, matching C6 counts; no body-bearing
-reply was observed. Startup order alone did not resolve the failure.
+## C6 host bring-up findings
 
-The subsequent WROOM startup trace captured two distinct, non-retry CMD-ACKs
-following one empty client reply, consistent with competing callback/fallback
-send paths. Both receivers counted 931 polls and four replies across two joins;
-WROOM reported no body-bearing replies or queue drops. Its `rx_us` values repeated
-across multiple packets, so **precise latency measurements are not validated**.
-The next WROOM-only diagnostic disables modem sleep with
-`esp_wifi_set_ps(WIFI_PS_NONE)` and verifies/logs the setting before capture.
-ESP-IDF defaults to `WIFI_PS_MIN_MODEM` independently of `CONFIG_PM_ENABLE` (off
-in this build); the RX timestamp contract requires modem/light sleep to be off.
-[Espressif issue #2468](https://github.com/espressif/esp-idf/issues/2468) reports
-this exact symptom and fix. Hardware testing confirmed the setting changed from
-1 to 0, but **did not resolve repeated timestamps**: the first startup window in
-`mp-trace-174033-COM6.log` had 43 repeats among 63 adjacent MP pairs (the older
-trace had 255/315). The initial `173405` recording captured no join/MP frames and
-cannot validate timing. Non-repeating timestamps would only be a necessary sanity
-check, not proof of calibrated RF latency. C6 was unchanged; Jordan still rendered
-PICTOBOT and then disconnected. Do not infer ACK latency from these traces.
-The next isolated C6 experiment uses atomic ACK ownership: whichever path claims
-first sends, and the other skips that cycle. Timing, Duration, and startup payloads
-are unchanged. This prevents duplicate submissions within a cycle; it does not
-resolve late-reply attribution or prove a Send fix. The September 22 single-ACK
-trial still rendered PICTOBOT and disconnected. Across five sampled startup windows
-(320 MP frames, including three replies), no consecutive CMD-ACK pairs were observed
-and queue drops remained zero. This supports the duplicate-submission fix, but no
-body-bearing reply or successful admission was observed; Send remains unresolved.
+`esp32c6host` gives each roster, heartbeat, or identity CMD its own reply/ACK
+cycle, and each join resets the identity schedule. The following conclusions came
+out of getting a DS to admit the C6 host and enable Send:
 
-The September 24 TX-completion diagnostic found a separate scheduling defect:
-for all 15 sampled full CMD frames, the fallback submitted ACK 44–46 microseconds
-before the driver reported CMD completion. The fallback now waits for successful
-CMD completion before starting its 1300-microsecond reply window; RX-triggered ACKs
-retain atomic ownership of the cycle. The corrected capture had no early ACK
-submissions, 3563 CMD and ACK completions each, 102 received empty replies and
-102 RX-triggered ACKs, with zero reported TX failures, rejections, or trace drops.
-These are software event measurements, not calibrated RF timings. Jordan still
-showed **no PICTOBOT and Send disabled**; neither receiver observed a body-bearing
-reply or type-6 admission. Keep the scheduling fix, but admission remains unresolved.
-Evidence: `captures_out/2026-09-24/tx-completion-122948-174622-COM12.log`
-and paired `tx-window-fix-123209-621054-COM12.log` / `COM6.log` captures.
-
-The following 2 Mbps long-preamble trial reached validated type-6 admission on
-three joins. Both C6 TX completion and independent WROOM RX reported PHY code 1
-(2 Mbps long preamble); WROOM observed body-bearing replies, including type-6
-admission and repeated type-3 packets. Jordan displayed PICTOBOT, but Send
-remained disabled and a connection error followed. Admission is now demonstrated;
-the identity exchange and messaging remain incomplete. This trial also retained
-the completion-based ACK timing fix. Host CMD Duration still measured zero on air,
-so nonzero Duration is not a necessary condition for this observed admission.
-Evidence: `captures_out/2026-09-24/rate-2m-started-125449-822924-COM12.log`
-and its paired COM6 log; firmware/source snapshot in `rate-2m-admission/`.
-
-On this C6/ESP-IDF build, both rate APIs returned ESP_FAIL before Wi-Fi startup,
-even with 802.11b selected first. `esp_wifi_config_80211_tx()` succeeded after
-startup with PHY mode 11B and rate `WIFI_PHY_RATE_2M_L`. The linked implementation
-checks for an allocated interface; see `c6-rate-api-disassembly.txt` in that
-capture directory. This observed behavior differs from the installed header's
-instruction to configure before startup. Earlier failed startup captures are
-retained as `rate-2m-long-*`, `rate-2m-long-b-*`, and `rate-2m-phy-*`.
-
-The subsequent roster-footer correction enabled Send. After admission, type-4/5
-CMD footers now target the granted client instead of always using mask zero.
-The DS uploaded both identity stages, which the host relayed; the user confirmed
-Send enabled and a roughly 102-second session ending by their own choice.
-The working snapshot is `captures_out/2026-09-24/roster-target-build/`, with paired
-`roster-target-mask-132416-595966` logs. See `docs/IDENTITY_EXCHANGE.md` for packet
-evidence and tests. The drawing relay and host reply are now implemented. The
-first live drawing was received and exported as a clean “123” image, and Send
-recovered. After requiring a DS reply before advancing granted application
-polls, the user confirmed two correct PICTOBOT replies and Send recovery after
-each. Four drawings were received and replied to in that session with verified
-body checksums. The working firmware is preserved in
-`captures_out/2026-09-24/drawing-reply-confirmed-build/`. See
-`docs/DRAWING_TRANSFER.md` for the implementation and validation evidence.
+- **Admission gating.** The host waits on type-5 polls until a complete, validated
+  type-6 reply arrives from the associated client, then sends seven type-4 roster
+  polls (matching the reference, not a proven required count) before the ordered
+  identity sequence. The parser accepts the observed 108-byte payload with declared
+  size `0x0068` and excludes the four-byte capture trailer. Gating, grant policy
+  (first typed poll granted after each join, one-in-three cadence, WM toggled on
+  every typed poll independently of grants), and type-5-before-type-4 startup
+  order did not by themselves produce admission.
+- **Duplicate ACKs.** Callback and fallback send paths could both ACK the same
+  cycle. Atomic ACK ownership now lets whichever path claims first send.
+- **ACK timing.** The fallback ACK was submitted 44–46 µs before the driver
+  reported CMD completion. It now waits for successful CMD completion before its
+  1300 µs reply window; RX-triggered ACKs keep atomic ownership.
+- **2 Mbps long preamble** is what reached type-6 admission (PHY code 1 on both C6
+  TX completion and WROOM RX). On this C6/ESP-IDF build, the rate APIs return
+  `ESP_FAIL` before Wi-Fi startup even with 802.11b selected first;
+  `esp_wifi_config_80211_tx()` succeeds after startup with PHY mode 11B and
+  `WIFI_PHY_RATE_2M_L`, contrary to the installed header's instruction to configure
+  before startup.
+- **CMD Duration** reads nonzero at PPDU setup (`hal_mac_tx_set_ppdu`) and EDCA
+  config (`hal_mac_tx_config_edca`) but is zero on air; writing the Duration
+  register (`0x600a54c0 - queue*116`) directly also left it zero and broke C6
+  reception, so that was reverted. Admission works with zero Duration, so nonzero
+  Duration is not necessary. The firmware keeps only read-only PPDU/EDCA probes.
+- **Roster footer.** After admission, type-4/5 CMD footers target the granted
+  client mask instead of zero. This enabled Send; see
+  [IDENTITY_EXCHANGE.md](IDENTITY_EXCHANGE.md). Drawing relay and host replies are in
+  [DRAWING_TRANSFER.md](DRAWING_TRANSFER.md).
+- **WROOM timestamps.** `rx_us` values repeat across packets even with modem sleep
+  disabled (`esp_wifi_set_ps(WIFI_PS_NONE)`; ESP-IDF defaults to
+  `WIFI_PS_MIN_MODEM` regardless of `CONFIG_PM_ENABLE`, see
+  [Espressif issue #2468](https://github.com/espressif/esp-idf/issues/2468)).
+  **Precise latency measurements are not validated**; do not infer ACK latency
+  from these traces.
 
 ## What's solid vs. what's a scaffold
 

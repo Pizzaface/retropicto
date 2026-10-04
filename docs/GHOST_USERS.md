@@ -8,8 +8,8 @@ Bio `Local ghost; online next`. A completed local drawing is echoed under that
 identity. The host remains at position zero. This build reserves the fourth room
 storage slot for GHOST, leaving capacity for three physical DS clients.
 
-The September 24 local trial succeeded: the user confirmed that GHOST appears,
-Send enables, and the drawing echo is attributed to GHOST. Both identity stages
+In a local trial GHOST appeared, Send enabled, and the drawing echo was
+attributed to GHOST. Both identity stages
 use the captured client announcement descriptor with a substituted roster
 position and profile. This proves the tested local exchange, not sustained
 reliability, capacity, or an internet relay.
@@ -77,31 +77,12 @@ late join, reconnect isolation, leave/rejoin, and outgoing author bytes.
 The online design shipped: `esp32c6usb` installs remote MLS room members as local
 ghosts over USB. See [USB_BRIDGE.md](USB_BRIDGE.md).
 
-## September 24, 2026 validation
+## Validation
 
-All 15 Windows-compatible native C tests passed with Zig (`-std=c11 -Wall
--Wextra -Werror`); the optional POSIX pthread ACK test was excluded. The
-`esp32c6ghost` and standard `esp32c6host` firmware builds passed. The ghost
-firmware was flashed to COM12 with esptool hash verification and remains on the C6.
-
-In the user-confirmed successful trial, the host received an 8,228-byte drawing at
-17:06:29.243 and completed its ghost echo at 17:06:33.112. The original body hash
-was `de3af333`; the outgoing body hash was `a59868cf`. Rewriting only the six sender
-MAC bytes in the exported original produces the outgoing hash. The serial DRAW
-export passed coverage and checksum validation.
-
-Evidence is under `captures_out/2026-09-24/` (ignored generated output):
-
-- `ghost-local-170345-835629-COM12.log` and `-COM6.log`: initial join/identity trial.
-- `ghost-drawing-170602-736245-COM12.log` and `-COM6.log`: successful drawing trial.
-- `ghost-local-verified/`: validated original drawing body and rendered bitmap.
-
-The drawing trial's bounded independent sniffer sample contains 267 host CMDs:
-7 grants with mask zero and 260 with mask 2 (real AID 1). None grants ghost AID 15.
-The sample includes both ghost profile stages but lacks enough drawing fragments
-to reconstruct the echo independently; screen confirmation and C6 completion
-logs are the evidence for the successful echo.
-
-The first session logged a wait for CMD TX completion, and the later session has
-nonzero TX failures. A reconnect preceded the confirmed drawing. This PoC does
-not resolve the adapter's existing timing/reliability questions.
+In the local trial, rewriting only the six sender MAC bytes of the received
+8,228-byte drawing reproduced the outgoing ghost body hash, and the serial DRAW
+export passed coverage and checksum validation. An independent sniffer sample of
+267 host CMDs had 7 grants with mask zero and 260 with mask 2 (real AID 1); none
+granted ghost AID 15. The trial also logged CMD TX completion waits, nonzero TX
+failures, and a reconnect, so this PoC does not resolve the adapter's existing
+timing/reliability questions.

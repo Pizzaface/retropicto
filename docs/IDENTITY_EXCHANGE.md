@@ -2,7 +2,7 @@
 
 ## Multi-client sender-slot correction
 
-The September 24 two-console trial exposed an AID-1 assumption below the room
+A two-console trial exposed an AID-1 assumption below the room
 scheduler: client identity receive, drawing receive, and RequestIdent still used
 member slot 1. The independent sniffer captured the second client's announcement
 as `000014000200ffff54000000e4513a026db06ee9` (member slot 2). The host advertised
@@ -15,14 +15,9 @@ Requests, identity validation, drawing assembly, and bot reply validation use th
 slot. Cross-client identity replay and drawing forwarding retain the original
 sender slot; slot 0 is reserved for host-originated data. Room tests now feed
 distinct slots and identity MACs, including AIDs 9 and 15, instead of cloning
-slot-1 packets into every session. Native regression checks cover this correction;
-successful display and Send behavior still require the console trial.
+slot-1 packets into every session. Native regression checks cover this correction.
 
-> Historical evidence: experimental captures, logs and binary snapshots cited below
-> were removed during cleanup. Retained regression data lives in `tests/fixtures/`.
-
-The September 24 `rate-2m-started-125449-822924` capture reached type-6
-admission on three joins. The DS displayed PICTOBOT, left Send disabled, and
+The first 2 Mbps long-preamble build reached type-6 admission on three joins. The DS displayed PICTOBOT, left Send disabled, and
 reported a connection error. The bounded WROOM packet trace contains type-6
 and repeated type-3 application packets; its final counters report 1220
 body-bearing replies. The counters do not identify the types of packets outside
@@ -31,7 +26,8 @@ the bounded trace. No completed client identity transfer is proven by this run.
 ## Working reference
 
 The following are zero-based packet indexes from `pictochat.capture.parse_pcap()`
-on `perfect01.pcap`. Application bytes exclude the host's six-byte MP prefix
+on `perfect01.pcap`, a working two-DS reference capture not in this repository.
+Application bytes exclude the host's six-byte MP prefix
 and four-byte footer, or the client's two-byte prefix and two-byte footer.
 These observations describe one working exchange, not universal field semantics.
 
@@ -99,7 +95,7 @@ and roster-to-application handoff. Both passed using `zig cc -std=c11 -Wall
 -Wextra -Werror`; local MinGW `gcc` could not launch its compiler subprocess.
 These tests do not prove radio reliability, WM footer semantics, or Send state.
 
-The first relay trial (`identity-relay-131348-705333` paired logs) displayed
+The first relay trial displayed
 PICTOBOT with Send disabled. It sent only the first host profile stage and then
 waited. The bounded trace showed admission followed by two-byte WM acknowledgments;
 no client type-0/type-2 identity was queued or relayed. The DS remained associated
@@ -108,45 +104,40 @@ session or a permanent disconnect fix. The next revision removes that wait and
 publishes both host stages, matching the Rust reference's own-profile burst.
 The golden application-byte tests still pass, with an added no-client-reply case.
 
-The two-stage trial (`identity-both-stages-131800-405889`) placed PICTOBOT in
-the DS top bar, but the user confirmed Send remained disabled. Both stages were
+The two-stage trial placed PICTOBOT in the DS top bar, but Send remained disabled. Both stages were
 sent, yet no client identity announcement/data reached the relay. The next
 isolated addition is the Rust reference's `RequestIdent(1)` packet after the host
 profile: `010014000100ffff5400000000000000b778d529`. This packet's role is taken
 from the reference implementation, not established by the working capture;
 its ability to solicit a DS identity is under hardware test.
 
-The request trial (`identity-request-132026-936086`) did not enable Send. The
+The request trial did not enable Send. The
 request was transmitted, and the DS responded with a type-3 packet rather than
 a type-0 identity announcement. The sampled application response begins
 `030014000169ffff0000000000213302af933202`. Neither type-0 nor type-2 client
 identity was observed in the bounded trace or queued by the host. This refutes
 the assumption that this request alone starts the missing client upload in the
 current session. Keep the packet semantics provisional; application type 3 is
-not treated as identity completion. The capture was stopped after the user
-reported Send disabled, and the firmware snapshot is `identity-request-build/`.
+not treated as identity completion.
 
 ## Verified admission and Send-enabled session
 
 The next correction changed the type-4/type-5 footer's client-target mask from
 constant zero to the poll grant mask after admission. Before admission it remains
 zero, preserving the successful startup behavior. In 488 post-admission roster
-and heartbeat packets from `perfect01.pcap` (parser indexes 471295–472499),
+and heartbeat packets from the reference capture (parser indexes 471295–472499),
 the footer mask matched the grant mask: 156 granted packets used 2 and 332
 ungranted packets used 0. The local `runner.rs` transmitter independently names
 and fills this footer field `client_target_mask` from the poll mask.
 
-`roster-target-mask-132416-595966` then reached both client identity relay stages
-and `identity_phase=6` at 13:24:35.272. The user confirmed **Send enabled**.
-The session lasted approximately 102 seconds, and the user explicitly confirmed
-leaving the room themselves; the disconnect was not a reported connection error.
-C6 reported 6652 CMD and ACK completions each, zero TX failures/rejections/trace
-drops, and the identity relay logged zero RX queue drops. The firmware/source
-snapshot is `captures_out/2026-09-24/roster-target-build/`.
+With that change the host reached both client identity relay stages and
+`identity_phase=6`, and **Send enabled**. The session lasted about 102 seconds and
+ended by leaving the room, not a connection error. C6 reported 6652 CMD and ACK
+completions each, zero TX failures/rejections/trace drops, and the identity relay
+logged zero RX queue drops.
 
-At the time (September 24) this was the working handshake baseline; drawing
-reception, reassembly, and host-originated transmission were implemented and
-hardware-validated afterwards (see [DRAWING_TRANSFER.md](DRAWING_TRANSFER.md)). Captured
+This is the working handshake baseline; drawing reception, reassembly, and
+host-originated transmission were implemented and hardware-validated on top of it (see [DRAWING_TRANSFER.md](DRAWING_TRANSFER.md)). Captured
 drawings in `send.pcap` use 160-byte chunks (172-byte application packets), with
 a four-byte final chunk in the complete 2084-byte message example.
 

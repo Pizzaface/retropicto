@@ -15,7 +15,7 @@ captures come in.
   - **Unicast style:** host → client MAC directly (seen during active drawing).
 - Beacons: host → `FF:FF:FF:FF:FF:FF`, 60-byte payload.
 
-## Message transfer (revalidated September 24)
+## Message transfer
 
 Payload length alone does not identify a stroke or a canvas row. Earlier notes
 misclassified short fragments and transfer announcements as drawing events.
@@ -101,9 +101,9 @@ Observed a **failure** variant too: assoc-resp **status 1, AID 0**
 trivial fixed templates. Timing is NOT the ~1 ms wall it first appeared — the
 host retries over seconds and once accepted a 318 ms-late assoc-resp.
 
-### TX / join injection experiment (2026-08-08) — historical
+### TX / join injection experiment — historical
 
-A second ESP32-C6 ran a since-removed active-joiner mode: it impersonated the
+A second ESP32-C6 ran an active-joiner mode: it impersonated the
 joiner MAC, spammed the presence data/1 frame, and answered auth/assoc. The
 project later switched to hosting the room instead (MODE_HOST).
 
