@@ -13,13 +13,13 @@ typedef enum {
 
 typedef struct {
     pictochat_event_type_t type;
-    unsigned peer_slot;         /* storage slot, distinct from Wi-Fi AID */
-    uint8_t aid, mac[6];        /* source for RECEIVED; recipient for SENT */
+    unsigned peer_slot; /* storage slot, distinct from Wi-Fi AID */
+    uint8_t aid, mac[6]; /* source for RECEIVED; recipient for SENT */
     uint32_t generation;
-    uint8_t sender_slot;        /* original author: host=0, client=AID */
-    uint32_t token;             /* little-endian announcement token */
+    uint8_t sender_slot; /* original author: host=0, client=AID */
+    uint32_t token; /* little-endian announcement token */
     const uint8_t *announcement; /* 20 bytes for message events, otherwise NULL */
-    const uint8_t *body;        /* borrowed complete message, otherwise NULL */
+    const uint8_t *body; /* borrowed complete message, otherwise NULL */
     size_t length;
 } pictochat_event_t;
 

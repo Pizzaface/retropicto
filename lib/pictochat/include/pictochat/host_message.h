@@ -24,9 +24,10 @@ static inline void host_message_reset(host_message_rx_t *s) {
 
 // Returns 1 exactly once per complete announced bitmap, -1 for invalid data,
 // and 0 while incomplete or for unrelated identity/control packets.
-static inline int host_message_receive_slot(host_message_rx_t *s, const uint8_t *app,
-                                            size_t len, uint8_t client_slot) {
-    if (len < 4 || host_message_u16(app + 2) != len) return -1;
+static inline int host_message_receive_slot(host_message_rx_t *s, const uint8_t *app, size_t len,
+                                            uint8_t client_slot) {
+    if (len < 4 || host_message_u16(app + 2) != len)
+        return -1;
     unsigned kind = host_message_u16(app);
     if (kind == 0 && len == 20) {
         unsigned total = host_message_u16(app + 8);
@@ -35,15 +36,18 @@ static inline int host_message_receive_slot(host_message_rx_t *s, const uint8_t 
             host_message_reset(s);
             return 0;
         }
-        if (s->active && memcmp(s->announcement, app, 20) == 0) return 0;
+        if (s->active && memcmp(s->announcement, app, 20) == 0)
+            return 0;
         host_message_reset(s);
         s->active = true;
         s->total = (uint16_t)total;
         memcpy(s->announcement, app, 20);
         return 0;
     }
-    if (kind != 2 || !s->active || s->invalid || s->complete) return 0;
-    if (len < 13 || app[4] != client_slot) return -1;
+    if (kind != 2 || !s->active || s->invalid || s->complete)
+        return 0;
+    if (len < 13 || app[4] != client_slot)
+        return -1;
     unsigned count = app[6], offset = host_message_u16(app + 8);
     bool final = (app[7] & 1) != 0;
     if (!count || len != 12 + count || offset + count > s->total ||
@@ -85,6 +89,7 @@ typedef struct {
     uint16_t offset;
     uint8_t copies;
 } host_message_cursor_t;
+
 typedef struct {
     host_message_cursor_t cursor;
     uint16_t total;
@@ -93,21 +98,24 @@ typedef struct {
 } host_message_tx_t;
 
 static inline void host_message_reply(host_message_tx_t *s, const uint8_t announcement[20],
-                                       const uint8_t *body, uint16_t total,
-                                       const uint8_t host_mac[6], uint32_t token) {
+                                      const uint8_t *body, uint16_t total,
+                                      const uint8_t host_mac[6], uint32_t token) {
     s->total = total;
     memcpy(s->announcement, announcement, 20);
     s->announcement[0] = 1;
     s->announcement[4] = 0;
-    for (unsigned i = 0; i < 4; ++i) s->announcement[16 + i] = (uint8_t)(token >> (8 * i));
+    for (unsigned i = 0; i < 4; ++i)
+        s->announcement[16 + i] = (uint8_t)(token >> (8 * i));
     memcpy(s->body, body, total);
     // Message sender MAC uses the same halfword swapping as ConsoleId.
-    for (unsigned i = 0; i < 6; ++i) s->body[2 + i] = host_mac[i ^ 1];
+    for (unsigned i = 0; i < 6; ++i)
+        s->body[2 + i] = host_mac[i ^ 1];
     s->cursor = (host_message_cursor_t){.active = true};
 }
 
 static inline bool host_message_next(host_message_tx_t *s, host_id_packet_t *out) {
-    if (!s->cursor.active) return false;
+    if (!s->cursor.active)
+        return false;
     if (!s->cursor.announced) {
         *out = (host_id_packet_t){.len = 20};
         memcpy(out->bytes, s->announcement, 20);
@@ -121,17 +129,22 @@ static inline bool host_message_next(host_message_tx_t *s, host_id_packet_t *out
     unsigned count = remaining < HOST_MESSAGE_CHUNK ? remaining : HOST_MESSAGE_CHUNK;
     *out = (host_id_packet_t){.len = (uint16_t)(12 + count)};
     uint8_t *a = out->bytes;
-    a[0] = 2; a[2] = (uint8_t)out->len; a[3] = (uint8_t)(out->len >> 8);
+    a[0] = 2;
+    a[2] = (uint8_t)out->len;
+    a[3] = (uint8_t)(out->len >> 8);
     a[4] = s->announcement[4];
-    a[6] = (uint8_t)count; a[7] = count == remaining;
-    a[8] = (uint8_t)s->cursor.offset; a[9] = (uint8_t)(s->cursor.offset >> 8);
+    a[6] = (uint8_t)count;
+    a[7] = count == remaining;
+    a[8] = (uint8_t)s->cursor.offset;
+    a[9] = (uint8_t)(s->cursor.offset >> 8);
     memcpy(a + 12, s->body + s->cursor.offset, count);
     // Native host captures repeat announcements and chunks. Each submission
     // gets a fresh WM sequence from the caller; the application bytes repeat.
     if (++s->cursor.copies == HOST_MESSAGE_COPIES) {
         s->cursor.copies = 0;
         s->cursor.offset += (uint16_t)count;
-        if (count == remaining) s->cursor.active = false;
+        if (count == remaining)
+            s->cursor.active = false;
     }
     return true;
 }
@@ -141,21 +154,24 @@ static inline bool host_message_next(host_message_tx_t *s, host_id_packet_t *out
 // tests/fixtures/drawing-header-full.bin. Smaller canvases need their own template.
 #define HOST_MESSAGE_FULL_BITMAP 10240u
 static const uint8_t host_message_full_header[HOST_MESSAGE_HEADER] = {
-    0x03,0x02,0,0,0,0,0,0,0x00,0x05,0x00,0x00,0x00,0x00,0x03,0x06,0x08,0x0d,
-    0x08,0x0d,0x12,0x1b,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    0x03, 0x02, 0,    0,    0, 0, 0, 0, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x03, 0x06, 0x08, 0x0d,
+    0x08, 0x0d, 0x12, 0x1b, 0, 0, 0, 0, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0};
 
 // Writes the 36-byte header plus a full-height bitmap into body (HOST_MESSAGE_MAX bytes).
 static inline bool host_message_body_full(uint8_t *body, const uint8_t mac[6],
                                           const uint8_t *bitmap, size_t bitmap_len) {
-    if (bitmap_len != HOST_MESSAGE_FULL_BITMAP) return false;
+    if (bitmap_len != HOST_MESSAGE_FULL_BITMAP)
+        return false;
     memcpy(body, host_message_full_header, HOST_MESSAGE_HEADER);
-    for (unsigned i = 0; i < 6; ++i) body[2 + i] = mac[i ^ 1];
+    for (unsigned i = 0; i < 6; ++i)
+        body[2 + i] = mac[i ^ 1];
     memcpy(body + HOST_MESSAGE_HEADER, bitmap, bitmap_len);
     return true;
 }
 
 static inline uint32_t host_message_hash(const uint8_t *p, size_t len) {
     uint32_t hash = 2166136261u;
-    for (size_t i = 0; i < len; ++i) hash = (hash ^ p[i]) * 16777619u;
+    for (size_t i = 0; i < len; ++i)
+        hash = (hash ^ p[i]) * 16777619u;
     return hash;
 }

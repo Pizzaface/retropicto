@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NAME = "RetroPicto"
 SOURCE_DIRS = {"docs", "examples", "firmware", "lib", "python", "tests", "tools"}
 ROOT_FILES = {
-    ".gitattributes", ".gitignore", "CMakeLists.txt", "INSTALL.md", "PROTOCOL.md",
+    ".clang-format", ".gitattributes", ".gitignore", "CMakeLists.txt", "INSTALL.md", "PROTOCOL.md",
     "README.md", "platformio.ini", "pyproject.toml", "relay.example.json",
     "sdkconfig.defaults", "wifi.example.json",
 }

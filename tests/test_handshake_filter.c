@@ -12,9 +12,13 @@ int main(void) {
         for (size_t len = 0; len < 24; ++len)
             assert(!is_handshake_frame(frame, len));
     }
-    frame[0] = 0x80; assert(!is_handshake_frame(frame, sizeof(frame))); // beacon
-    frame[0] = 0x40; assert(!is_handshake_frame(frame, sizeof(frame))); // probe
-    frame[0] = 0x28; assert(!is_handshake_frame(frame, sizeof(frame))); // MP poll
-    frame[0] = 0xd4; assert(!is_handshake_frame(frame, sizeof(frame))); // ACK
+    frame[0] = 0x80;
+    assert(!is_handshake_frame(frame, sizeof(frame))); // beacon
+    frame[0] = 0x40;
+    assert(!is_handshake_frame(frame, sizeof(frame))); // probe
+    frame[0] = 0x28;
+    assert(!is_handshake_frame(frame, sizeof(frame))); // MP poll
+    frame[0] = 0xd4;
+    assert(!is_handshake_frame(frame, sizeof(frame))); // ACK
     return 0;
 }
