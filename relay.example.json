@@ -1,8 +1,0 @@
-{
-  "port": 8787,
-  "url": "ws://127.0.0.1:8787",
-  "nodes": [
-    {"id":"a", "room":"bench", "side":"a", "ble_name":"PICTO-A", "token":"REPLACE_WITH_UNIQUE_RANDOM_SECRET_FOR_A"},
-    {"id":"b", "room":"bench", "side":"b", "ble_name":"PICTO-B", "token":"REPLACE_WITH_UNIQUE_RANDOM_SECRET_FOR_B"}
-  ]
-}

@@ -1,5 +1,4 @@
-# Generated build, package, editor and capture output. Prebuilt release images
-# under firmware/prebuilt are intentional distribution inputs and remain tracked.
+# Generated build, package, editor and capture output; legacy local secrets.
 .pio/
 .platformio-core/
 build/

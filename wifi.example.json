@@ -1,6 +1,0 @@
-{
-  "ssid": "YOUR_2_4_GHZ_SSID",
-  "password": "YOUR_WIFI_PASSWORD",
-  "node_a_mac": "02:00:00:00:00:01",
-  "node_b_mac": "02:00:00:00:00:02"
-}

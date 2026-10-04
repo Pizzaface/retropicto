@@ -13,9 +13,9 @@ SPEC.loader.exec_module(release)
 class PackageReleaseTests(unittest.TestCase):
     def test_sensitive_and_generated_paths_are_excluded(self):
         for name in (
-            ".env.local", "relay.local.json", "wifi.local.json", "sdkconfig.multihop_c6_a",
+            ".env.local", "relay.local.json", "wifi.local.json", "sdkconfig.esp32c6usb",
             "android/local.properties", "firmware/esp32/wifi_credentials.h",
-            "server/relay.local.json", "tools/__pycache__/flash_multihop.pyc",
+            "server/relay.local.json", "tools/__pycache__/usb_bridge.pyc",
             "captures_out/session.pcap", "dist/previous.zip", "build/native/cache",
         ):
             with self.subTest(name=name):
@@ -30,15 +30,15 @@ class PackageReleaseTests(unittest.TestCase):
                 for name in (".clang-format", "tools/format_c.py"):
                     self.assertEqual(archive.read(f"RetroPicto/{name}"), (ROOT / name).read_bytes())
 
-    def test_archive_contains_prebuilt_images_and_no_companion_sources(self):
+    def test_archive_contains_firmware_sources_and_no_companion_sources(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "RetroPicto.zip"
             count, _digest = release.package(output)
             self.assertGreater(count, 20)
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
-                self.assertIn("RetroPicto/firmware/prebuilt/manifest.json", names)
-                self.assertIn("RetroPicto/firmware/prebuilt/multihop_c6_a/firmware.bin", names)
+                self.assertIn("RetroPicto/platformio.ini", names)
+                self.assertIn("RetroPicto/firmware/esp32/main.c", names)
                 self.assertIn("RetroPicto/python/pictochat/message.py", names)
                 self.assertFalse(any("/android/" in name or "/server/" in name for name in names))
                 self.assertNotIn("RetroPicto/relay.local.json", names)
