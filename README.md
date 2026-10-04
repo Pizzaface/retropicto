@@ -154,3 +154,16 @@ hardware validation. Formatting or a native test pass is not a radio smoke test.
 
 No source license is declared yet. Third-party AI example assets retain their
 own notices; read their adjacent license files before redistribution.
+
+## Trademarks and affiliation
+
+Nintendo, Nintendo DS, Nintendo DS Lite, Nintendo DSi, and PictoChat are
+trademarks of Nintendo. RetroPicto is an independent fan project. It is not
+affiliated with, endorsed by, sponsored by, or approved by Nintendo.
+
+PictoChat compatibility comes from independent observation of over-the-air
+traffic between consoles the authors own. This repository contains no Nintendo
+code, firmware, ROMs, BIOS images, encryption keys, or other copyrighted
+Nintendo assets, and RetroPicto does not modify the consoles. Nintendo names
+appear only to describe compatibility. You need your own DS hardware to use
+RetroPicto.
