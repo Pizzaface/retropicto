@@ -1,0 +1,20 @@
+title: RetroPicto
+description: Bring Nintendo DS PictoChat rooms together.
+baseurl: /retropicto
+theme: jekyll-theme-cayman
+include: [README.md]
+exclude:
+  - AGENTS.md
+  - captures_out
+  - examples
+  - firmware
+  - lib
+  - python
+  - tests
+  - tools
+  - "sdkconfig*"
+  - "*.json"
+  - "*.ini"
+  - "*.toml"
+  - CMakeLists.txt
+  - docs/third-party
