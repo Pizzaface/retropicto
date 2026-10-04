@@ -13,12 +13,12 @@ typedef struct {
     host_id_packet_t packet; // successfully delivered relay (announcement type 1)
 } host_relay_repeat_t;
 
-static inline bool host_relay_repeat_skip(const host_relay_repeat_t *s,
-    uint32_t generation, uint16_t sequence, const uint8_t *app, size_t len,
-    int64_t now_us) {
+static inline bool host_relay_repeat_skip(const host_relay_repeat_t *s, uint32_t generation,
+                                          uint16_t sequence, const uint8_t *app, size_t len,
+                                          int64_t now_us) {
     return s->valid && s->generation == generation && s->sequence == sequence &&
-        now_us >= s->delivered_us && now_us - s->delivered_us < HOST_RELAY_REPEAT_US &&
-        app && len > 0 && len <= sizeof(s->packet.bytes) && s->packet.len == len &&
-        s->packet.bytes[0] == (app[0] == 0 ? 1 : app[0]) &&
-        !memcmp(s->packet.bytes + 1, app + 1, len - 1);
+           now_us >= s->delivered_us && now_us - s->delivered_us < HOST_RELAY_REPEAT_US && app &&
+           len > 0 && len <= sizeof(s->packet.bytes) && s->packet.len == len &&
+           s->packet.bytes[0] == (app[0] == 0 ? 1 : app[0]) &&
+           !memcmp(s->packet.bytes + 1, app + 1, len - 1);
 }

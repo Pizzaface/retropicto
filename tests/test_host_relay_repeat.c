@@ -5,8 +5,11 @@ int main(void) {
     uint8_t app[20] = {0, 0, 20, 0, 1};
     host_relay_repeat_t s = {0};
     assert(!host_relay_repeat_skip(&s, 1, 7, app, sizeof(app), 1000));
-    s = (host_relay_repeat_t){.valid = true, .generation = 1, .sequence = 7,
-        .delivered_us = 1000, .packet = {.len = sizeof(app)}};
+    s = (host_relay_repeat_t){.valid = true,
+                              .generation = 1,
+                              .sequence = 7,
+                              .delivered_us = 1000,
+                              .packet = {.len = sizeof(app)}};
     memcpy(s.packet.bytes, app, sizeof(app));
     s.packet.bytes[0] = 1; // A committed announcement relay changes only type.
     assert(host_relay_repeat_skip(&s, 1, 7, app, sizeof(app), 1001));
@@ -23,7 +26,8 @@ int main(void) {
     assert(host_relay_repeat_skip(&s, 1, 7, app, sizeof(app), 1001));
     app[8] = 1; // New fragment offset must never be suppressed.
     assert(!host_relay_repeat_skip(&s, 1, 7, app, sizeof(app), 1001));
-    app[8] = 0; app[12] = 1;
+    app[8] = 0;
+    app[12] = 1;
     assert(!host_relay_repeat_skip(&s, 1, 7, app, sizeof(app), 1001));
     assert(!host_relay_repeat_skip(&s, 1, 7, NULL, 0, 1001));
     return 0;

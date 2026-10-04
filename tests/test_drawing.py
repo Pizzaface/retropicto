@@ -1,4 +1,5 @@
 import pathlib
+import re
 import struct
 import sys
 import tempfile
@@ -104,8 +105,10 @@ class DrawingTests(unittest.TestCase):
 
 def _own_data0():
     text = (ROOT / 'tests/host_identity_fixture.h').read_text()
-    line = next(l for l in text.splitlines() if l.startswith('static const uint8_t own_data0[]'))
-    return [int(v, 16) for v in line[line.index('{') + 1:line.index('}')].split(',')]
+    match = re.search(r'static\s+const\s+uint8_t\s+own_data0\[\]\s*=\s*\{([^}]*)\}', text, re.S)
+    if match is None:
+        raise ValueError('own_data0 fixture not found')
+    return [int(v.strip(), 16) for v in match.group(1).split(',') if v.strip()]
 
 
 if __name__ == '__main__':

@@ -10,7 +10,8 @@
 // Preserve the rest of the captured 84-byte identity and clear unused space.
 static inline bool host_profile_set_bio(uint8_t profile[84], const uint_least16_t *bio,
                                         size_t units) {
-    if (units > HOST_PROFILE_BIO_UNITS) return false;
+    if (units > HOST_PROFILE_BIO_UNITS)
+        return false;
     memset(profile + HOST_PROFILE_BIO_OFFSET, 0, HOST_PROFILE_BIO_UNITS * 2);
     for (size_t i = 0; i < units; ++i) {
         profile[HOST_PROFILE_BIO_OFFSET + 2 * i] = (uint8_t)bio[i];
@@ -26,7 +27,8 @@ static inline bool host_profile_set_bio(uint8_t profile[84], const uint_least16_
 // UTF-16LE nickname; clears the unused part of the 20-byte field.
 static inline bool host_profile_set_name(uint8_t profile[84], const uint_least16_t *name,
                                          size_t units) {
-    if (units > HOST_PROFILE_NAME_UNITS) return false;
+    if (units > HOST_PROFILE_NAME_UNITS)
+        return false;
     memset(profile + HOST_PROFILE_NAME_OFFSET, 0, HOST_PROFILE_NAME_UNITS * 2);
     for (size_t i = 0; i < units; ++i) {
         profile[HOST_PROFILE_NAME_OFFSET + 2 * i] = (uint8_t)name[i];
@@ -37,7 +39,8 @@ static inline bool host_profile_set_name(uint8_t profile[84], const uint_least16
 
 // DS favourite colour index 0..15 (captured profiles: 11 blue, 15 magenta).
 static inline bool host_profile_set_colour(uint8_t profile[84], unsigned colour) {
-    if (colour > 15) return false;
+    if (colour > 15)
+        return false;
     profile[HOST_PROFILE_COLOUR_OFFSET] = (uint8_t)colour;
     return true;
 }
@@ -46,10 +49,12 @@ static inline bool host_profile_set_colour(uint8_t profile[84], unsigned colour)
 // name/bio, colour, birthday month/day. Callers then set name/bio.
 static inline bool host_profile_init(uint8_t profile[84], const uint8_t mac[6], unsigned colour,
                                      unsigned month, unsigned day) {
-    if (colour > 15 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+    if (colour > 15 || month < 1 || month > 12 || day < 1 || day > 31)
+        return false;
     memset(profile, 0, 84);
     profile[0] = 3;
-    for (unsigned i = 0; i < 6; ++i) profile[2 + i] = mac[i ^ 1];
+    for (unsigned i = 0; i < 6; ++i)
+        profile[2 + i] = mac[i ^ 1];
     profile[HOST_PROFILE_COLOUR_OFFSET] = (uint8_t)colour;
     profile[82] = (uint8_t)month;
     profile[83] = (uint8_t)day;

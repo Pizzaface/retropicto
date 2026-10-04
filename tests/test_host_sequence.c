@@ -7,16 +7,16 @@ int main(void) {
     // No admission: empty once, then heartbeats forever.
     host_sequence_reset(&seq);
     assert(host_sequence_next(&seq, false) == HOST_FRAME_EMPTY);
-    for (int i=0; i<1000; ++i)
+    for (int i = 0; i < 1000; ++i)
         assert(host_sequence_next(&seq, false) == HOST_FRAME_HEARTBEAT);
 
     // Valid admission after empty: 7 roster polls, then application state takes over.
     host_sequence_reset(&seq);
     assert(host_sequence_next(&seq, false) == HOST_FRAME_EMPTY);
     assert(host_sequence_next(&seq, true) == HOST_FRAME_ROSTER);
-    for (int i=0; i<6; ++i)
+    for (int i = 0; i < 6; ++i)
         assert(host_sequence_next(&seq, true) == HOST_FRAME_ROSTER);
-    for (int cycle=0; cycle<40; ++cycle)
+    for (int cycle = 0; cycle < 40; ++cycle)
         assert(host_sequence_next(&seq, true) == HOST_FRAME_SESSION);
 
     // Duplicate admission does not reset: mid-cycle, admission stays true.

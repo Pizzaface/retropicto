@@ -21,6 +21,15 @@ class PackageReleaseTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(release.allowed(name))
 
+    def test_archive_contains_reproducible_formatter(self):
+        self.assertTrue(release.allowed(".clang-format"))
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "RetroPicto.zip"
+            release.package(output)
+            with zipfile.ZipFile(output) as archive:
+                for name in (".clang-format", "tools/format_c.py"):
+                    self.assertEqual(archive.read(f"RetroPicto/{name}"), (ROOT / name).read_bytes())
+
     def test_archive_contains_prebuilt_images_and_no_companion_sources(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "RetroPicto.zip"
