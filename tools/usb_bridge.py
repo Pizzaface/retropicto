@@ -4,6 +4,7 @@ Same-PC trial: python tools/usb_bridge.py --ports COM12 COM5
 Two PCs: --port COM12 --listen 127.0.0.1:26712 (use SSH forwarding)
          --port COM5 --connect 127.0.0.1:26712
 The C6s own message ACKs/retries; this process never acknowledges a drawing.
+Bench tool only: production boards talk to the Android app, not this bridge.
 """
 import argparse
 import datetime
@@ -83,6 +84,7 @@ class SerialEndpoint:
     def __init__(self, name, reset=False):
         import serial
         self.name = name
+        self.lock = threading.Lock()  # pump thread and @OPEN keepalive share the port
         self.device = serial.Serial(port=None, baudrate=115200, timeout=0.1, write_timeout=3)
         self.device.dtr = False
         self.device.rts = False
@@ -102,11 +104,12 @@ class SerialEndpoint:
     def send(self, data):
         # Leading newline allows recovery after an interrupted write/reconnection.
         data = b'\n' + data
-        while data:
-            count = self.device.write(data[:1024])
-            if not count:
-                raise OSError('Serial write stalled')
-            data = data[count:]
+        with self.lock:
+            while data:
+                count = self.device.write(data[:1024])
+                if not count:
+                    raise OSError('Serial write stalled')
+                data = data[count:]
 
     def close(self):
         self.device.close()
@@ -229,11 +232,21 @@ def main():
                 thread.start()
                 workers.append(thread)
             deadline = time.monotonic() + args.seconds if args.seconds else None
+            next_open = 0
             while not stop.wait(0.1):
-                if deadline is not None and time.monotonic() >= deadline:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
                     break
+                if now >= next_open:  # firmware closes the room after 10 s without @OPEN
+                    for endpoint in endpoints:
+                        if isinstance(endpoint, SerialEndpoint):
+                            endpoint.send(b'@OPEN\n')
+                    next_open = now + 3
         except KeyboardInterrupt:
             pass
+        except OSError as error:
+            errors.append(error)
+            report('bridge', str(error), True)
         finally:
             stop.set()
             for worker in workers:

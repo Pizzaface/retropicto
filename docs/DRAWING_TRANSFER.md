@@ -72,8 +72,8 @@ the resulting host message remains to be checked.
   with byte offsets and FNV-1a checksums. `tools/export_drawings.py` rejects missing
   or corrupt serial dumps and exports `.bin` plus a rendered `.png`.
 
-Run `python tools/export_drawings.py <COM12-log> -o captures_out` after a test.
-`DRAW bot TX complete` means driver completion only; it does not prove that the DS
+Run `python tools/export_drawings.py <serial-log> -o captures_out` after a test.
+`DRAW outbound TX complete` means driver completion only; it does not prove that the DS
 displayed the reply. The live test must check visible PICTOBOT replies and that
 Send becomes available again after multiple consecutive drawings.
 

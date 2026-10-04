@@ -6,7 +6,6 @@
 // in platformio.ini; the default here keeps a bare `pio run` doing STREAM.
 #define MODE_DISCOVERY 0
 #define MODE_STREAM 1
-#define MODE_JOIN 2
 #define MODE_HOST 3
 #define MODE_SERIAL_MGMT 4 // fixed-channel, USB-only handshake diagnostics
 #ifndef SNIFFER_MODE

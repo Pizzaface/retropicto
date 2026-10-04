@@ -10,11 +10,10 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = "RetroPicto"
-SOURCE_DIRS = {"docs", "examples", "firmware", "lib", "python", "tests", "tools"}
+SOURCE_DIRS = {"docs", "firmware", "lib", "python", "tests", "tools"}
 ROOT_FILES = {
-    ".clang-format", ".gitattributes", ".gitignore", "CMakeLists.txt", "INSTALL.md", "PROTOCOL.md",
-    "README.md", "platformio.ini", "pyproject.toml", "relay.example.json",
-    "sdkconfig.defaults", "wifi.example.json",
+    ".clang-format", ".gitattributes", ".gitignore", "CMakeLists.txt", "PROTOCOL.md",
+    "README.md", "platformio.ini", "pyproject.toml", "sdkconfig.defaults",
 }
 EXCLUDED_PARTS = {
     ".git", ".pio", ".venv", "venv", "build", "dist", "node_modules",
@@ -50,11 +49,7 @@ def collect() -> dict[str, bytes]:
         source = ROOT / name
         if source.is_file():
             payload[name] = source.read_bytes()
-    required = {
-        "README.md", "INSTALL.md", "firmware/prebuilt/manifest.json",
-        "tests/fixtures/send.pcap", "examples/ai-participant/fonts/LICENSE",
-        "examples/ai-participant/emoji/LICENSE-GRAPHICS",
-    }
+    required = {"README.md", "platformio.ini", "firmware/esp32/main.c", "tests/fixtures/send.pcap"}
     missing = required - payload.keys()
     if missing:
         raise RuntimeError(f"Required release file missing: {sorted(missing)[0]}")

@@ -144,9 +144,9 @@ C6 reported 6652 CMD and ACK completions each, zero TX failures/rejections/trace
 drops, and the identity relay logged zero RX queue drops. The firmware/source
 snapshot is `captures_out/2026-09-24/roster-target-build/`.
 
-This is the working handshake baseline. Drawing reception, reassembly, and
-host-originated message transmission still require implementation and live proof;
-the identity-only relay currently rejects larger drawing fragments. Captured
+At the time (September 24) this was the working handshake baseline; drawing
+reception, reassembly, and host-originated transmission were implemented and
+hardware-validated afterwards (see [DRAWING_TRANSFER.md](DRAWING_TRANSFER.md)). Captured
 drawings in `send.pcap` use 160-byte chunks (172-byte application packets), with
 a four-byte final chunk in the complete 2084-byte message example.
 

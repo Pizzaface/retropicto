@@ -1,4 +1,4 @@
-# Ghost users and an online relay
+# Ghost users
 
 ## Local proof of concept
 
@@ -16,12 +16,11 @@ reliability, capacity, or an internet relay.
 
 ```sh
 pio run -e esp32c6ghost
-pio run -e esp32c6ghost -t upload --upload-port COM12
-python tools/capture_serial.py --seconds 120 --label ghost-local
+pio run -e esp32c6ghost -t upload --upload-port <port>
+python tools/capture_serial.py --ports <port> --seconds 120 --label ghost-local
 ```
 
-The capture tool defaults to COM6 and COM12; use `--ports COM12` when only the C6
-is connected. Start the capture before joining the room. Then:
+`--ports` is required (no default); list every board you want recorded. Start the capture before joining the room. Then:
 
 1. Join room B from one DS and check for PICTOBOT and GHOST as distinct users.
 2. Open GHOST's profile and check its name and Bio. Wait for Send to enable.
@@ -73,31 +72,10 @@ the original drawing. There is no unbounded offline history.
 poll exclusion, malformed input, retries, backpressure, two-recipient delivery,
 late join, reconnect isolation, leave/rejoin, and outgoing author bytes.
 
-## Path to online PictoChat
+## Online rooms
 
-The proposed topology is:
-
-```text
-DS A <-> C6 A <-> USB bridge A <-> internet relay <-> USB bridge B <-> C6 B <-> DS B
-```
-
-Each C6 would keep its local association, polling, acknowledgments and transfer
-retries. The internet layer would exchange participant profiles, membership
-changes and completed drawing bodies. Remote users would be installed as local
-ghosts; a remote drawing would use ghost_send after validation and normalization.
-AIDs are local room positions and must be mapped, not copied between rooms.
-
-The bridge still needs framed bidirectional serial transport, bounded queues,
-remote identity/generation mapping, message IDs and duplicate suppression, room
-membership/disconnection handling, and a relay service. Received remote messages
-must not be exported back to their origin. Preserve the drawing bitmap while
-mapping sender metadata to the destination room's virtual identity.
-
-USB is the initial transport proposal. Espressif documents that the C6 shares a
-single Wi-Fi channel between station and SoftAP modes, with the station's channel
-taking priority. Combining the custom PictoChat host with a router connection
-would therefore need separate channel and timing validation; it is not established
-by this PoC. See the [Espressif Wi-Fi API documentation](https://docs.espressif.com/projects/esp-idf/en/v5.2/esp32c6/api-reference/network/esp_wifi.html).
+The online design shipped: `esp32c6usb` installs remote MLS room members as local
+ghosts over USB. See [USB_BRIDGE.md](USB_BRIDGE.md).
 
 ## September 24, 2026 validation
 

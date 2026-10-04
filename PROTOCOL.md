@@ -66,13 +66,19 @@ missing fragments from unrelated messages. `--inpaint` is now an obsolete no-op.
   of metadata; observed complete examples include 16 and 64 pixels. The maximum
   supported bitmap is 256x80 (10,240 bitmap bytes).
 - The corrected `send.pcap` reconstruction renders "12345" without artificial
-  gaps. Run `python tools/render_canvas.py send.pcap -o captures_out`.
-- These are captured message transfers. Live ESP message reception/transmission
-  and incremental drawing semantics still require implementation and DS tests.
+  gaps. Run `python tools/render_canvas.py tests/fixtures/send.pcap -o captures_out`.
+- The ESP32-C6 host receives and transmits complete message transfers with
+  physical DS consoles. Incremental drawing semantics remain unverified.
 
-## Join / association handshake (confidence: high — CAPTURED)
+## Join / association handshake
 
-Captured fresh in `join01.pcap` by recording the joiner DS entering the host's
+**Current model (what the firmware implements):** association is standard and
+client-initiated. The DS sends Auth and Assoc-Req to the ESP32 SoftAP; the
+ESP-IDF MLME answers, and the AID (1..15) comes from the `WIFI_EVENT_AP_STACONNECTED`
+event. Only the MP CMD/ACK layer is raw-injected.
+
+**Historical capture interpretation** (superseded; `join01.pcap` is not in this
+repository). Captured by recording the joiner DS entering the host's
 room (repeated ~4x). Host `00:22:D7:39:BC:A3` = room creator/AP; joiner
 `64:B5:C6:9C:60:A0`. **Roles are inverted vs. infrastructure Wi-Fi: the HOST
 initiates auth *and* the assoc-request toward the joiner.** Sequence:
@@ -95,10 +101,11 @@ Observed a **failure** variant too: assoc-resp **status 1, AID 0**
 trivial fixed templates. Timing is NOT the ~1 ms wall it first appeared — the
 host retries over seconds and once accepted a 318 ms-late assoc-resp.
 
-### TX / join injection experiment (2026-08-08) — findings
+### TX / join injection experiment (2026-08-08) — historical
 
-Second board (ESP32-C6, COM12) flashed with `MODE_JOIN`: impersonates the joiner
-MAC, spams the presence data/1 frame, answers auth/assoc.
+A second ESP32-C6 ran a since-removed active-joiner mode: it impersonated the
+joiner MAC, spammed the presence data/1 frame, and answered auth/assoc. The
+project later switched to hosting the room instead (MODE_HOST).
 
 - **Injection works** — 23,915 presence frames confirmed on air.
 - **But the host never engaged the C6.** When no client is active the host just
@@ -116,7 +123,7 @@ MAC, spams the presence data/1 frame, answers auth/assoc.
 - Joiner→host `deauth` (reason 3) is what the joiner sends when the user *leaves*
   a room.
 
-**Open blocker:** to join, the C6 must reproduce the DS's beacon-TSF / TDMA slot
+**Former blocker** (moot under MODE_HOST): to join, the C6 had to reproduce the DS's beacon-TSF / TDMA slot
 sync so the host will engage it — not just replay frames. Capturing the trigger
 needs a non-lossy monitor (a real monitor-mode adapter), not the ESP32 sniffer.
 
@@ -132,11 +139,8 @@ fresh, labelled captures.
 - ~~Exact canvas width / origin / bit order~~ — SOLVED: 256x80, 4bpp 8x8 tiles.
 - The old image breakup was a decoder offset error, now fixed by validated
   fragment extraction and removal of the 36-byte message header.
-- ~~The **join / association handshake**~~ — **CAPTURED** in `join01.pcap` and
-  fully decoded (Open-System auth, host-initiated, ~1 ms responses). See the
-  "Join / association handshake" section above.
-- **TX feasibility**: whether `esp_wifi_80211_tx()` can meet the DS TDMA
-  response timing well enough to be accepted as a participant. Untested; this is
-  the biggest risk for the "send a message" goal.
+- ~~The **join / association handshake**~~ — see the current model above.
+- ~~**TX feasibility**~~ — SOLVED: the C6 hosts rooms and DS consoles send and
+  receive messages through it (2 Mbps long preamble, see `docs/FIRMWARE.md`).
 - Meaning of the `81 93 32 02` / `9f c5 36 02` fields — appear as the per-event
   hash at **bytes 10–13 of the 114 B poll/sync frames**; still unconfirmed.

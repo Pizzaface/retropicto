@@ -1,6 +1,7 @@
 # Portable library and Python port contract
 
-The library provides a per-client session engine and a four-client room scheduler.
+The library provides a per-client session engine and a room scheduler with
+`PICTOCHAT_ROOM_CLIENTS` slots (default 4; `esp32c6usb` builds 6).
 Wi-Fi association, channel selection, radio timing and a complete Python host remain
 adapter responsibilities. Multi-client wire behavior is experimental until verified
 with physical consoles. Captured constants are not claims that every DS variant uses
@@ -8,7 +9,7 @@ the same protocol.
 
 ## Multi-client rooms
 
-Allocate `pictochat_room_t` in static/heap storage (roughly 100 KB). Its four storage
+Allocate `pictochat_room_t` in static/heap storage (roughly 24 KB per slot). Its storage
 slots are independent of association IDs: accept AIDs 1..15 and pass the actual AID
 to `pictochat_room_join`, with a nonzero generation changed on each new association.
 Duplicate joins preserve state. Set the peer's `admitted` flag only after validating

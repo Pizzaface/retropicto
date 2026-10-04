@@ -35,16 +35,12 @@ picks its channel (1–13) unpredictably, so the workflow is two steps:
 
 ## Step 1 — Find the DS channel (discovery mode)
 
-Edit `firmware/esp32/main.c`:
-
-```c
-#define SNIFFER_MODE   MODE_DISCOVERY
-```
-
-Build, flash, and watch serial (PlatformIO):
+The `esp32dev_disc` environment selects `SNIFFER_MODE=0` (discovery).
+Build, flash, and watch serial (PlatformIO; there is no `default_envs`, so a plain
+`pio run -t upload` would build every environment):
 
 ```
-pio run -t upload
+pio run -e esp32dev_disc -t upload
 pio device monitor
 ```
 
@@ -60,16 +56,16 @@ The `ch` column is your DS channel. Note it (e.g. **7**).
 
 ## Step 2 — Stream to Wireshark
 
-Back in `firmware/esp32/main.c`:
+The `esp32dev` environment selects `SNIFFER_MODE=1` (stream). Channel and SoftAP
+defaults live in `firmware/esp32/firmware_config.h`:
 
 ```c
-#define SNIFFER_MODE    MODE_STREAM
 #define CAPTURE_CHANNEL 7          // the channel you found in step 1
 #define AP_SSID  "pictochat-sniffer"
 #define AP_PASS  "dspackets"       // >= 8 chars, or "" for an open AP
 ```
 
-Reflash: `pio run -t upload` (then `pio device monitor`)
+Reflash: `pio run -e esp32dev -t upload` (then `pio device monitor`)
 
 Then on your PC:
 
@@ -334,7 +330,7 @@ body checksums. The working firmware is preserved in
 - **Channels 12/13:** allowed only in some regions. If your DSs land there, call
   `esp_wifi_set_country()` in the firmware for a region that permits them.
 - **FCS trailer:** if Wireshark shows a bogus 4-byte trailer, set
-  `#define FCS_AT_END 0` in the firmware.
+  `#define FCS_AT_END 0` in `firmware_config.h`.
 - **Dropped frames:** raise `CAP_QUEUE_LEN` in the firmware if the heartbeat
   count outruns Wireshark's.
 

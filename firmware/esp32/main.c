@@ -1,9 +1,8 @@
 // RetroPicto ESP32 adapter: radio I/O, capture, and PictoChat room tasks.
 //
-// platformio.ini selects one of five SNIFFER_MODE values:
+// platformio.ini selects one of four SNIFFER_MODE values:
 //   MODE_DISCOVERY    Channel-hopping Nintendo-frame discovery over serial.
 //   MODE_STREAM       Fixed-channel radiotap/PCAP capture over SoftAP UDP.
-//   MODE_JOIN         Experimental active client for a real DS room host.
 //   MODE_HOST         PictoChat room host, echo bot, or online relay adapter.
 //   MODE_SERIAL_MGMT  Fixed-channel USB-only handshake and packet diagnostics.
 //
@@ -55,17 +54,6 @@
 #include "firmware_config.h"
 #include "capture_packet.h"
 
-// ---- MODE_JOIN: join a real DS host as an ACTIVE 802.11 client ----
-// Corrected model (see PROTOCOL.md): association is standard and CLIENT-initiated.
-// The client sends Auth-Req(seq1) then Assoc-Req; it does NOT wait for the host.
-// The Assoc-Req SSID is derived live from the host beacon's 0xDD vendor IE
-// (game_id ‖ stream_code ‖ zeros), so we must latch onto a beacon first.
-// We take the joiner's MAC as our STA MAC (run the real joiner DS OFF).
-// Our OWN unique client MAC (Nintendo OUI 00:09:BF so the host treats us as a DS
-// client, but distinct from any real console). Impersonating a live console's MAC
-// collides on-air — diagnosed 2026-08-08: the real DS shares 64:b5:c6:9c:60:a0.
-static const uint8_t JOIN_SELF_MAC[6] = {0x00, 0x09, 0xBF, 0xC6, 0xC6, 0xC6}; // us (client)
-static const uint8_t JOIN_HOST_MAC[6] = {0x00, 0x22, 0xD7, 0x39, 0xBC, 0xA3}; // room host
 // Hardcoded MP multicast MACs (silicon-fixed on the DS).
 static const uint8_t MP_CMD_MCAST[6] = {0x03, 0x09, 0xBF, 0x00, 0x00, 0x00}; // host CMD
 static const uint8_t MP_REPLY_MCAST[6] = {0x03, 0x09, 0xBF, 0x00, 0x00, 0x10}; // client REPLY
@@ -132,359 +120,12 @@ static volatile uint32_t s_usb_empty_replies = 0, s_usb_data_replies = 0;
 static volatile uint32_t s_usb_reply_bytes = 0, s_usb_host_cmds = 0;
 #endif
 
-#if SNIFFER_MODE == MODE_JOIN || SNIFFER_MODE == MODE_HOST
+#if SNIFFER_MODE == MODE_HOST
 // esp_wifi_80211_tx() rejects auth/assoc management subtypes by default. This
 // strong override neuters the raw-frame sanity check so the driver accepts them.
 // Requires linking with -Wl,-zmuldefs (set in platformio.ini for the C6 env).
 int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) {
     return 0;
-}
-#endif
-
-#if SNIFFER_MODE == MODE_JOIN
-// ---- Join state, latched from the host's beacon 0xDD vendor IE ----
-typedef enum { JS_SCAN, JS_AUTH_SENT, JS_ASSOC_SENT, JS_JOINED } join_state_t;
-
-static volatile join_state_t s_js = JS_SCAN;
-static volatile bool s_have_beacon = false;
-static volatile uint8_t s_game_id[4] = {0}; // IE data 0x0C..0x0F
-static volatile uint16_t s_stream_code = 0; // IE data 0x10..0x11 (LE)
-static volatile bool s_got_authresp = false; // host Auth-Resp seq2, status 0
-static volatile int s_assoc_status = -1; // host Assoc-Resp status (-1 = none)
-static volatile uint16_t s_aid_bit = 0; // our poll bit in the CMD client_bitmask
-static volatile uint32_t s_polls = 0, s_replies = 0; // data-phase counters
-
-// The ConsoleId-announce token: a client-minted RANDOM 32-bit transaction handle,
-// fresh per announce (decoded from perfect01.pcap — the real DS uses a distinct
-// random value every announce; the host merely echoes it in its tid=1 rebroadcast).
-// We mint one per join_send_ctrl52() call; replaying a fixed value made the host
-// dedupe our transfer as a replay. Seeded with the perfect01 value for the first
-// send only; esp_random() overwrites it each call.
-static volatile uint32_t s_tok = 0xd7a0885e; // 5e 88 a0 d7 as LE u32
-
-// The host's live "key" (perfect01: e4 09) that the real DS echoes in its 30B steady
-// reply payload `00 00 <key>`. We captured it hardcoded as 0c 00; the real reply
-// mirrors the host's current value, seen trailing every host CMD-ACK as `<key> fd 3f`.
-static volatile uint8_t s_hostkey[2] = {0xe4, 0x09};
-
-// DIAG (scan visibility): counters for what's actually on air while we're stuck in
-// JS_SCAN — distinguishes "host isn't beaconing" from "beacon seen but IE not parsed".
-static volatile uint32_t s_bcn_host = 0, s_bcn_other = 0, s_cmd_seen = 0;
-
-static inline void join_tx(const uint8_t *buf, size_t len) {
-    esp_wifi_80211_tx(WIFI_IF_STA, buf, len, true /* en_sys_seq */);
-}
-
-// Parse a host beacon's Nintendo 0xDD vendor IE to latch game_id + stream_code.
-static void join_parse_beacon(const uint8_t *f, int len) {
-    int pos = 24 + 12; // MAC header + (timestamp 8 + interval 2 + capab 2)
-    while (pos + 2 <= len) {
-        uint8_t tag = f[pos], tlen = f[pos + 1];
-        if (pos + 2 + tlen > len)
-            break;
-        const uint8_t *d = f + pos + 2; // IE data
-        if (tag == 0xDD && tlen >= 0x12 && d[0] == 0x00 && d[1] == 0x09 &&
-            d[2] == 0xBF) { // Nintendo OUI
-            for (int i = 0; i < 4; i++)
-                s_game_id[i] = d[0x0C + i];
-            s_stream_code = d[0x10] | (d[0x11] << 8);
-            s_have_beacon = true;
-            return;
-        }
-        pos += 2 + tlen;
-    }
-}
-
-// Build + send an open-system Auth-Req (seq 1) to the host.
-static void join_send_auth(void) {
-    uint8_t fr[30];
-    fr[0] = 0xB0;
-    fr[1] = 0x00; // FC: mgmt / auth
-    fr[2] = 0xA2;
-    fr[3] = 0x00; // duration
-    memcpy(fr + 4, JOIN_HOST_MAC, 6); // addr1 RA  = host
-    memcpy(fr + 10, JOIN_SELF_MAC, 6); // addr2 TA  = us
-    memcpy(fr + 16, JOIN_HOST_MAC, 6); // addr3 BSSID = host
-    fr[22] = 0;
-    fr[23] = 0; // seq (HW fills)
-    fr[24] = 0x00;
-    fr[25] = 0x00; // auth algorithm = Open System
-    fr[26] = 0x01;
-    fr[27] = 0x00; // auth transaction seq = 1
-    fr[28] = 0x00;
-    fr[29] = 0x00; // status = 0
-    join_tx(fr, sizeof(fr));
-}
-
-// Build + send an Assoc-Req whose SSID is derived from the latched beacon IE.
-static void join_send_assoc(void) {
-    uint8_t fr[64];
-    int n = 0;
-    fr[n++] = 0x00;
-    fr[n++] = 0x00; // FC: mgmt / assoc-req
-    fr[n++] = 0xA2;
-    fr[n++] = 0x00; // duration
-    memcpy(fr + n, JOIN_HOST_MAC, 6);
-    n += 6; // addr1 RA  = host
-    memcpy(fr + n, JOIN_SELF_MAC, 6);
-    n += 6; // addr2 TA  = us
-    memcpy(fr + n, JOIN_HOST_MAC, 6);
-    n += 6; // addr3 BSSID = host
-    fr[n++] = 0;
-    fr[n++] = 0; // seq (HW fills)
-    fr[n++] = 0x21;
-    fr[n++] = 0x00; // capability = ESS | Short Preamble
-    fr[n++] = 0x01;
-    fr[n++] = 0x00; // listen interval = 1
-    // SSID IE: game_id(4) ‖ stream_code(2 LE) ‖ 26 zeros  (32 bytes total)
-    fr[n++] = 0x00;
-    fr[n++] = 0x20;
-    for (int i = 0; i < 4; i++)
-        fr[n++] = s_game_id[i];
-    fr[n++] = s_stream_code & 0xFF;
-    fr[n++] = (s_stream_code >> 8) & 0xFF;
-    for (int i = 0; i < 26; i++)
-        fr[n++] = 0x00;
-    // Supported Rates IE: 1M and 2M, both basic
-    fr[n++] = 0x01;
-    fr[n++] = 0x02;
-    fr[n++] = 0x82;
-    fr[n++] = 0x84;
-    join_tx(fr, n);
-}
-
-// Send the steady-state REPLY to the host's CMD poll, in our slot. This is the
-// byte-exact 30-byte frame a REAL DS client sends (perfect01.pcap: 155k of them),
-// NOT an empty CF-Ack — a small fast frame that fits even the narrow 214us slot.
-static void join_send_reply(void) {
-    uint8_t fr[30];
-    fr[0] = 0x18;
-    fr[1] = 0x11; // FC: Data+CF-Ack, ToDS|PwrMgmt (real DS)
-    fr[2] = 0xfe;
-    fr[3] = 0x03; // duration 0x03fe (captured)
-    memcpy(fr + 4, JOIN_HOST_MAC, 6); // addr1 = host BSSID
-    memcpy(fr + 10, JOIN_SELF_MAC, 6); // addr2 = us (client)
-    memcpy(fr + 16, MP_REPLY_MCAST, 6); // addr3 = REPLY multicast
-    fr[22] = 0;
-    fr[23] = 0; // seq (HW fills)
-    fr[24] = 0x00;
-    fr[25] = 0x80; // wmHeader (port0 | VSync)
-    fr[26] = 0x00;
-    fr[27] = 0x00; // payload `00 00 <host key>` — the real DS
-    fr[28] = s_hostkey[0];
-    fr[29] = s_hostkey[1]; // echoes the host's live key (e4 09)
-    join_tx(fr, sizeof(fr));
-    s_replies++;
-}
-
-// Stage B: the 136-byte ConsoleId header/data frame (type 6, size 0x68=104). Byte-exact
-// from perfect01.pcap [idx 471294] — the FIRST identity frame the real DS sends after
-// assoc, carrying its 84-byte ConsoleId body (all zeros on that console). Its own
-// random transfer token sits after the `06 00 68 00` descriptor.
-static void join_send_hdr136(void) {
-    uint8_t fr[132];
-    int n = 0;
-    fr[n++] = 0x18;
-    fr[n++] = 0x11; // FC (captured)
-    fr[n++] = 0x56;
-    fr[n++] = 0x02; // duration (captured)
-    memcpy(fr + n, JOIN_HOST_MAC, 6);
-    n += 6;
-    memcpy(fr + n, JOIN_SELF_MAC, 6);
-    n += 6;
-    memcpy(fr + n, MP_REPLY_MCAST, 6);
-    n += 6;
-    fr[n++] = 0;
-    fr[n++] = 0; // seq (HW fills)
-    fr[n++] = 0x34;
-    fr[n++] = 0x8c; // wmHeader (len_half 0x34=104, port12)
-    fr[n++] = 0x06;
-    fr[n++] = 0x00;
-    fr[n++] = 0x68;
-    fr[n++] = 0x00; // type6, size 104
-    uint32_t tok = esp_random(); // ConsoleId transfer token (random)
-    fr[n++] = tok & 0xff;
-    fr[n++] = (tok >> 8) & 0xff;
-    fr[n++] = (tok >> 16) & 0xff;
-    fr[n++] = (tok >> 24) & 0xff;
-    while (n < 130)
-        fr[n++] = 0x00; // 96-byte ConsoleId body (zeros)
-    fr[n++] = 0x02;
-    fr[n++] = 0x00; // trailer (captured 02 00)
-    join_tx(fr, n); // n == 132; HW appends FCS -> 136 on air
-    s_replies++;
-}
-
-// Stage B: the 52-byte transfer-progress CONTROL frame (port13). Byte-exact from
-// perfect01.pcap [idx 471340] — the real DS sends this between the stage-0 data and
-// the stage-1 announce, and again after stage-1, with an incrementing counter
-// (0x0009 then 0x000b). The 9d0233 02 / 6f0233 02 fields are fixed in the capture.
-static void join_send_ctrl_progress(uint16_t ctr) {
-    uint8_t fr[48];
-    int n = 0;
-    fr[n++] = 0x18;
-    fr[n++] = 0x11; // FC (captured)
-    fr[n++] = 0xa6;
-    fr[n++] = 0x03; // duration (captured)
-    memcpy(fr + n, JOIN_HOST_MAC, 6);
-    n += 6;
-    memcpy(fr + n, JOIN_SELF_MAC, 6);
-    n += 6;
-    memcpy(fr + n, MP_REPLY_MCAST, 6);
-    n += 6;
-    fr[n++] = 0;
-    fr[n++] = 0; // seq (HW fills)
-    fr[n++] = 0x0a;
-    fr[n++] = 0x8d; // wmHeader (port13)
-    static const uint8_t body[20] = {0x03, 0x00, 0x14, 0x00, 0x01, 0x04, 0xff, 0xff, 0x9d, 0x02,
-                                     0x33, 0x02, 0x01, 0x00, 0x00, 0x00, 0x6f, 0x02, 0x33, 0x02};
-    memcpy(fr + n, body, sizeof(body));
-    n += sizeof(body);
-    fr[n++] = ctr & 0xff;
-    fr[n++] = (ctr >> 8) & 0xff; // progress counter
-    join_tx(fr, n); // n == 48; HW appends FCS -> 52 on air
-    s_replies++;
-}
-
-// How many profile-card frames we've pushed since the last (re)join. We spam the
-// identity for the first N reply slots, then fall back to empty keepalive REPLYs.
-static volatile int s_profile_sends = 0;
-
-// Stage B: send our identity/profile card as a DATA REPLY in our poll slot.
-// Byte-exact reconstruction of a REAL client profile reply captured in
-// perfect01.pcap (frame #471329, the "Ash" console). Layout (no Nintendo CRC —
-// only the 802.11 FCS, per ref §3.4 — so MAC/name may be swapped freely):
-//   24B MAC | wmHeader(30 8e = len_half 96B, port14+VSync)
-//   payload[96] = 02 00 | 60 00 | 01 00 | 54 01 00 00 | 00 00 | 03 00
-//                 | <our MAC halfword-swapped> | <name UTF-16LE> | pad | 0f 00 04 14
-//   | seqNo footer (04 00)   [port>=8 carries a 2-byte seq footer]
-// The real DS sends the identity as TWO 128B frames — stage 0 (tag 03 00) and
-// stage 1 (tag 03 01), identical but for that tag byte and the seqNo footer
-// (04/05). `stage` selects which.
-static void join_send_profile(int stage) {
-    uint8_t fr[124];
-    int n = 0;
-    fr[n++] = 0x18;
-    fr[n++] = 0x11; // FC: Data+CF-Ack, ToDS|PwrMgmt (captured)
-    fr[n++] = 0x76;
-    fr[n++] = 0x02; // duration (captured)
-    memcpy(fr + n, JOIN_HOST_MAC, 6);
-    n += 6; // addr1 = host BSSID
-    memcpy(fr + n, JOIN_SELF_MAC, 6);
-    n += 6; // addr2 = us (client)
-    memcpy(fr + n, MP_REPLY_MCAST, 6);
-    n += 6; // addr3 = REPLY multicast
-    fr[n++] = 0;
-    fr[n++] = 0; // seq (HW fills)
-    fr[n++] = 0x30;
-    fr[n++] = 0x8e; // wmHeader: len_half=48 (96B), port14|VSync
-    int app0 = n; // 96-byte payload starts here
-    fr[n++] = 0x02;
-    fr[n++] = 0x00; // payload[0..1] (captured)
-    fr[n++] = 0x60;
-    fr[n++] = 0x00; // payload len = 96
-    fr[n++] = 0x01;
-    fr[n++] = 0x00; // type = 1 (identity), flags = 0
-    fr[n++] = 0x54;
-    fr[n++] = 0x01; // total transfer size = 0x0154 = 340
-    fr[n++] = 0x00;
-    fr[n++] = 0x00;
-    fr[n++] = 0x00;
-    fr[n++] = 0x00;
-    fr[n++] = 0x03;
-    fr[n++] = (uint8_t)stage; // identity magic, stage (0 or 1)
-    fr[n++] = 0x09;
-    fr[n++] = 0x00; // our MAC, byte-pairs swapped:
-    fr[n++] = 0xC6;
-    fr[n++] = 0xBF; //   00:09:BF:C6:C6:C6 -> 09 00 C6 BF C6 C6
-    fr[n++] = 0xC6;
-    fr[n++] = 0xC6;
-    static const char *nm = "name"; // name, UTF-16LE
-    for (const char *p = nm; *p; p++) {
-        fr[n++] = (uint8_t)*p;
-        fr[n++] = 0x00;
-    }
-    while (n < app0 + 92)
-        fr[n++] = 0x00; // zero-pad to payload offset 92
-    fr[n++] = 0x0f;
-    fr[n++] = 0x00; // payload[92..95] trailer (captured)
-    fr[n++] = 0x04;
-    fr[n++] = 0x14;
-    fr[n++] = (uint8_t)(0x04 + stage);
-    fr[n++] = 0x00; // seqNo footer (04/05)
-    join_tx(fr, n); // n == 124; HW appends FCS
-    s_replies++;
-}
-
-// Stage B: the 52-byte ConsoleId ANNOUNCE control frame (port 13). Byte-exact from
-// perfect01.pcap (the real DS's "54 00 00 00 29 00 69 00" = announce an 84-byte,
-// type-0x69 ConsoleId transfer). Per the reference, render (appearing on screen) is
-// gated on the host seeing this announce then the ConsoleId completing. The 4
-// trailing bytes are a transaction token minted fresh (esp_random) on every call —
-// perfect01 shows the real DS never reuses one; the host echoes it in its tid=1.
-static void join_send_ctrl52(void) {
-    uint8_t fr[48];
-    int n = 0;
-    fr[n++] = 0x18;
-    fr[n++] = 0x11; // FC (captured)
-    fr[n++] = 0xa6;
-    fr[n++] = 0x03; // duration (captured)
-    memcpy(fr + n, JOIN_HOST_MAC, 6);
-    n += 6;
-    memcpy(fr + n, JOIN_SELF_MAC, 6);
-    n += 6;
-    memcpy(fr + n, MP_REPLY_MCAST, 6);
-    n += 6;
-    fr[n++] = 0;
-    fr[n++] = 0; // seq (HW fills)
-    fr[n++] = 0x0a;
-    fr[n++] = 0x8d; // wmHeader: len_half=10 (20B), port13|VSync
-    fr[n++] = 0x00;
-    fr[n++] = 0x00; // 20-byte payload (captured announce):
-    fr[n++] = 0x14;
-    fr[n++] = 0x00;
-    fr[n++] = 0x01;
-    fr[n++] = 0x00;
-    fr[n++] = 0xff;
-    fr[n++] = 0xff;
-    fr[n++] = 0x54;
-    fr[n++] = 0x00;
-    fr[n++] = 0x00;
-    fr[n++] = 0x00; // size 84
-    fr[n++] = 0x29;
-    fr[n++] = 0x00;
-    fr[n++] = 0x69;
-    fr[n++] = 0x00; // type 0x69
-    // token: a fresh random 32-bit transaction handle, minted per announce (the real
-    // DS never repeats one; a reused token reads to the host as a replayed transfer).
-    s_tok = esp_random();
-    fr[n++] = s_tok & 0xff;
-    fr[n++] = (s_tok >> 8) & 0xff;
-    fr[n++] = (s_tok >> 16) & 0xff;
-    fr[n++] = (s_tok >> 24) & 0xff;
-    fr[n++] = 0x08;
-    fr[n++] = 0x00; // seqNo footer (port>=8)
-    join_tx(fr, n); // n == 48; HW appends FCS
-    s_replies++;
-}
-
-// Deauth (reason 3) to the host — real DS clients send this on leave. We use it to
-// clear a stale association ghost (e.g. after reflashing while joined) so the host
-// will accept a fresh auth/assoc instead of rejecting the already-known MAC.
-static void join_send_deauth(void) {
-    uint8_t fr[26];
-    fr[0] = 0xC0;
-    fr[1] = 0x00; // FC: mgmt / deauth
-    fr[2] = 0x00;
-    fr[3] = 0x00; // duration
-    memcpy(fr + 4, JOIN_HOST_MAC, 6); // addr1 RA  = host
-    memcpy(fr + 10, JOIN_SELF_MAC, 6); // addr2 TA  = us
-    memcpy(fr + 16, JOIN_HOST_MAC, 6); // addr3 BSSID = host
-    fr[22] = 0;
-    fr[23] = 0; // seq (HW fills)
-    fr[24] = 0x03;
-    fr[25] = 0x00; // reason 3
-    join_tx(fr, sizeof(fr));
 }
 #endif
 
@@ -617,7 +258,7 @@ static QueueHandle_t s_host_app_queue[PICTOCHAT_ROOM_CLIENTS];
 static atomic_uint s_host_app_drops;
 #if CONFIG_IDF_TARGET_ESP32
 // Original ESP32 has a tighter static DRAM window than its total internal heap.
-// Reserve the room before starting Wi-Fi/BLE, outside the radio callback path.
+// Reserve the room before starting Wi-Fi, outside the radio callback path.
 static pictochat_room_t *s_room;
 #else
 static pictochat_room_t s_room_storage;
@@ -1184,198 +825,6 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     }
 #endif
 
-#if SNIFFER_MODE == MODE_JOIN
-    const uint8_t *a1 = f + WLAN_ADDR1_OFF; // dst / RA
-    const uint8_t *a2 = f + WLAN_ADDR2_OFF; // src / TA
-
-    // Latch the host's live "key": it trails every host CMD-ACK as `<key> fd 3f`.
-    // The real DS echoes it in its 30B steady reply payload `00 00 <key>`.
-    if (memcmp(a1, MP_ACK_MCAST, 6) == 0 && len >= 32 && f[30] == 0xfd && f[31] == 0x3f) {
-        s_hostkey[0] = f[28];
-        s_hostkey[1] = f[29];
-    }
-
-    // Data phase: the host CMD poll is a data frame to the CMD multicast. It is
-    // BOTH the poll (client_bitmask) AND the carrier for member-list (type 4/5)
-    // and identity-announce (type 1) app frames. If our AID bit is polled, fire
-    // an empty REPLY immediately (in-slot keepalive), then decode the app layer.
-    if (fc_type(f) == 2 && memcmp(a1, MP_CMD_MCAST, 6) == 0) {
-        s_cmd_seen++; // DIAG
-        if (s_js == JS_JOINED && len >= 28) {
-            s_polls++;
-            uint16_t bitmask = f[26] | (f[27] << 8); // CMD body 0x1A client_bitmask
-            if (bitmask & s_aid_bit) {
-#if SEND_PROFILE
-                // Real DS sends its 128B identity only a handful of times, and it
-                // needs a WIDE reply slot (client_time ~998us); a 128B frame @2Mbps
-                // is ~512us and overflows the narrow 214us slot. So send identity a
-                // few times, only when the granted slot is wide enough.
-                uint16_t ctime = f[24] | (f[25] << 8); // reply-slot width (us)
-                if (ctime >= 500 && s_profile_sends < 7) {
-                    // Byte-exact real-DS identity sequence (perfect01.pcap map_join),
-                    // one frame per wide reply slot:
-                    //   hdr136 -> announce0 -> data0 -> ctrl -> announce1 -> data1 -> ctrl
-                    switch (s_profile_sends) {
-                    case 0:
-                        join_send_hdr136();
-                        break; // ConsoleId header
-                    case 1:
-                        join_send_ctrl52();
-                        break; // announce st0 (tok)
-                    case 2:
-                        join_send_profile(0);
-                        break; // data st0 (name)
-                    case 3:
-                        join_send_ctrl_progress(0x0009);
-                        break; // progress
-                    case 4:
-                        join_send_ctrl52();
-                        break; // announce st1 (tok)
-                    case 5:
-                        join_send_profile(1);
-                        break; // data st1
-                    case 6:
-                        join_send_ctrl_progress(0x000b);
-                        break; // progress
-                    }
-                    s_profile_sends++;
-                } else {
-                    join_send_reply();
-                }
-#else
-                join_send_reply();
-#endif
-            }
-
-            // DIAG (Stage B): decode the CMD app layer. Header map (after 24B MAC):
-            //   f[24..25] client_time  f[26..27] bitmask  f[28..29] wmHeader
-            //   f[30..31] app type_id  f[32..33] size  f[34..37] magic
-            //   f[38..]   member table (16 x 6B, MAC halfword-swapped, host first)
-            if (len >= 44) {
-                uint16_t wm = f[28] | (f[29] << 8);
-                uint16_t tid = f[30] | (f[31] << 8);
-                // our MAC as stored in the member table (each 2-byte pair swapped)
-                static const uint8_t self_sw[6] = {0x09, 0x00, 0xC6, 0xBF, 0xC6, 0xC6};
-                bool in_roster = false;
-                int members = 0;
-                if ((tid == 4 || tid == 5) && len >= 38 + 96) {
-                    const uint8_t *mt = f + 38;
-                    for (int e = 0; e < 16; e++) {
-                        const uint8_t *m = mt + e * 6;
-                        bool zero = true;
-                        for (int i = 0; i < 6; i++)
-                            if (m[i]) {
-                                zero = false;
-                                break;
-                            }
-                        if (!zero)
-                            members++;
-                        if (memcmp(m, self_sw, 6) == 0)
-                            in_roster = true;
-                    }
-                }
-                // Log only when the picture changes (type_id, roster, or count).
-                static int last_tid = -2, last_roster = -2, last_members = -2;
-                if (tid != last_tid || in_roster != last_roster || members != last_members) {
-                    last_tid = tid;
-                    last_roster = in_roster;
-                    last_members = members;
-                    int n = len - 30;
-                    if (n > 20)
-                        n = 20;
-                    char hex[48];
-                    int p = 0;
-                    for (int i = 0; i < n; i++)
-                        p += sprintf(hex + p, "%02x", f[30 + i]);
-                    uint16_t ct = f[24] | (f[25] << 8); // reply-slot width (us)
-                    ESP_LOGI(TAG, "CMD ct=%u wm=%04x tid=%u members=%d us_in_roster=%d app=%s", ct,
-                             wm, tid, members, in_roster, hex);
-                }
-            }
-        }
-        return;
-    }
-    // DIAG: any non-CMD data frame the host directs at us (identity unicast, etc.)
-    if (s_js == JS_JOINED && fc_type(f) == 2 && len >= 26) {
-        const uint8_t *a3 = f + 16;
-        uint32_t sig = ((uint32_t)a3[5] << 24) ^ ((uint32_t)a1[5] << 20) ^ ((uint32_t)f[24] << 12) ^
-                       ((uint32_t)f[25] << 4) ^ (uint32_t)(len & 0xF);
-        static uint32_t seen_sig[48];
-        static int seen_n;
-        bool known = false;
-        for (int i = 0; i < seen_n; i++)
-            if (seen_sig[i] == sig) {
-                known = true;
-                break;
-            }
-        if (!known && seen_n < 48) {
-            seen_sig[seen_n++] = sig;
-            int bl = len - 24;
-            if (bl > 24)
-                bl = 24;
-            char hex[64];
-            int p = 0;
-            for (int i = 0; i < bl; i++)
-                p += sprintf(hex + p, "%02x", f[24 + i]);
-            const char *dst = (memcmp(a1, JOIN_SELF_MAC, 6) == 0) ? "US" : "mc";
-            ESP_LOGI(TAG, "DIAG->%s a3=%02x:%02x fc=%02x%02x len=%d body=%s", dst, a3[4], a3[5],
-                     f[0], f[1], len, hex);
-        }
-    }
-    if (fc_type(f) != 0)
-        return; // otherwise management only
-    uint8_t st = fc_subtype(f);
-
-    if (st == 8) { // beacon
-        if (memcmp(a2, JOIN_HOST_MAC, 6) == 0) { // our host -> latch IE
-            s_bcn_host++; // DIAG
-            bool had = s_have_beacon;
-            join_parse_beacon(f, len);
-            if (!had && s_have_beacon) // DIAG: confirm the IE actually parsed
-                ESP_LOGI(TAG, "BEACON latched host IE game=%02x%02x%02x%02x stream=0x%04x",
-                         s_game_id[0], s_game_id[1], s_game_id[2], s_game_id[3], s_stream_code);
-            return;
-        }
-        // DIAG: a Nintendo beacon from someone other than our hardcoded host — log
-        // each distinct source once so we can spot a room hosted by the other DS.
-        s_bcn_other++;
-        static uint8_t seen_bcn[8][6];
-        static int seen_bcn_n;
-        bool known = false;
-        for (int i = 0; i < seen_bcn_n; i++)
-            if (memcmp(seen_bcn[i], a2, 6) == 0) {
-                known = true;
-                break;
-            }
-        if (!known && seen_bcn_n < 8) {
-            memcpy(seen_bcn[seen_bcn_n++], a2, 6);
-            ESP_LOGI(TAG, "BEACON from non-host %02x:%02x:%02x:%02x:%02x:%02x", a2[0], a2[1], a2[2],
-                     a2[3], a2[4], a2[5]);
-        }
-        return;
-    }
-    // Below here we only care about the host talking directly to us.
-    if (memcmp(a1, JOIN_SELF_MAC, 6) != 0 || memcmp(a2, JOIN_HOST_MAC, 6) != 0)
-        return;
-    if (st == 11) { // Auth-Resp
-        uint16_t aseq = (len >= 28) ? (f[26] | (f[27] << 8)) : 0;
-        uint16_t stat = (len >= 30) ? (f[28] | (f[29] << 8)) : 0xFFFF;
-        if (aseq == 2 && stat == 0)
-            s_got_authresp = true;
-    } else if (st == 1) { // Assoc-Resp: capture status + AID
-        s_assoc_status = (len >= 28) ? (f[26] | (f[27] << 8)) : 0xFFFF;
-        if (len >= 30) {
-            uint16_t aid = (f[28] | (f[29] << 8)) & 0x3FFF; // strip the top 2 bits
-            s_aid_bit = (uint16_t)(1u << (aid & 0x0F));
-        }
-    } else if (st == 12) { // Deauth -> restart
-        s_js = JS_SCAN;
-        s_got_authresp = false;
-        s_assoc_status = -1;
-    }
-    return;
-#endif
-
 #if SNIFFER_MODE == MODE_DISCOVERY
     // Serial-only: summarize the frame and the channel it arrived on.
     const uint8_t *src = f + WLAN_ADDR2_OFF;
@@ -1490,165 +939,6 @@ static void hopper_task(void *arg) {
         esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
         vTaskDelay(pdMS_TO_TICKS(300)); // dwell long enough to catch beacons
         ch = (ch >= 13) ? 1 : ch + 1;
-    }
-}
-#endif
-
-#if SNIFFER_MODE == MODE_JOIN
-// Active client: latch a beacon, then drive Auth-Req -> Assoc-Req, retrying until
-// the host accepts (Assoc-Resp status 0). Deauth or timeout resets to SCAN.
-static void join_task(void *arg) {
-    static int assoc_fails = 0; // consecutive full auth+assoc rounds that failed
-    static int assoc_resends = 0; // Assoc-Req resends within the current round
-    // Clear any stale association from a prior boot (e.g. reflash while joined) so
-    // the host will accept a fresh handshake instead of rejecting a known MAC.
-    join_send_deauth();
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(60));
-        switch (s_js) {
-        case JS_SCAN:
-            if (!s_have_beacon) { // wait for the host's 0xDD IE
-                static int scan_ticks = 0; // DIAG: ~1s throttle (60ms/tick)
-                if (++scan_ticks >= 16) {
-                    scan_ticks = 0;
-                    ESP_LOGW(TAG,
-                             "SCAN: no host beacon — host_bcn=%lu other_bcn=%lu "
-                             "cmd=%lu seen=%lu",
-                             (unsigned long)s_bcn_host, (unsigned long)s_bcn_other,
-                             (unsigned long)s_cmd_seen, (unsigned long)s_seen);
-                }
-                continue;
-            }
-            s_got_authresp = false;
-            s_assoc_status = -1;
-            join_send_auth();
-            ESP_LOGI(TAG, "JOIN: tx Auth-Req (stream=0x%04x)", s_stream_code);
-            s_js = JS_AUTH_SENT;
-            break;
-        case JS_AUTH_SENT: {
-            for (int i = 0; i < JOIN_RETRY_MS / 20 && !s_got_authresp; i++)
-                vTaskDelay(pdMS_TO_TICKS(20));
-            if (!s_got_authresp) {
-                s_js = JS_SCAN;
-                break;
-            } // retry from scratch
-            assoc_resends = 0; // fresh round: reset resend budget
-            join_send_assoc();
-            ESP_LOGI(TAG, "JOIN: rx Auth-Resp -> tx Assoc-Req");
-            s_js = JS_ASSOC_SENT;
-            break;
-        }
-        case JS_ASSOC_SENT: {
-            for (int i = 0; i < JOIN_RETRY_MS / 20 && s_assoc_status < 0; i++)
-                vTaskDelay(pdMS_TO_TICKS(20));
-            if (s_assoc_status == 0) {
-                ESP_LOGI(TAG, "JOIN: Assoc-Resp OK  *** JOINED — sending identity ***");
-                assoc_fails = 0;
-                assoc_resends = 0;
-                s_profile_sends = 0; // re-announce our profile this session
-                s_js = JS_JOINED;
-            } else if (++assoc_resends < ASSOC_RESEND_MAX) {
-                // Auth is reliably answered but the Assoc-Resp is often missed. The
-                // host keeps us authenticated, so resend the Assoc-Req directly
-                // instead of paying for a full re-auth round-trip. join_send_assoc()
-                // reads the live s_game_id/s_stream_code, which the beacon RX cb
-                // refreshes on every beacon — so each resend uses the freshest
-                // stream_code (a stale code is a common rejection cause).
-                s_assoc_status = -1;
-                join_send_assoc();
-                ESP_LOGW(TAG, "JOIN: assoc miss — resend Assoc-Req (%d/%d, stream=0x%04x)",
-                         assoc_resends, ASSOC_RESEND_MAX, s_stream_code);
-                // stay in JS_ASSOC_SENT to await the resend's response
-            } else {
-                ESP_LOGW(TAG, "JOIN: assoc status=%d after %d resends — full re-auth",
-                         s_assoc_status, assoc_resends);
-                assoc_resends = 0;
-                // A run of failed rounds usually means a stale ghost or stale beacon.
-                // Deauth to clear the host's entry and force a fresh beacon latch.
-                if (++assoc_fails >= 3) {
-                    assoc_fails = 0;
-                    join_send_deauth();
-                    s_have_beacon = false; // re-latch the freshest beacon
-                }
-                s_js = JS_SCAN; // rejection is normal; retry
-            }
-            break;
-        }
-        case JS_JOINED: {
-            // Associated + replying to CMD polls. Report progress; if the poll
-            // stream dries up (host dropped us without a deauth we caught),
-            // fall back to SCAN and rejoin.
-            uint32_t p0 = s_polls;
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            ESP_LOGI(TAG, "JOIN: in room — polls=%lu replies=%lu (+%lu polls/s)",
-                     (unsigned long)s_polls, (unsigned long)s_replies,
-                     (unsigned long)(s_polls - p0));
-            if (s_polls == p0) { // no polls for a full second
-                ESP_LOGW(TAG, "JOIN: poll stream stopped — rejoining");
-                s_js = JS_SCAN;
-                s_got_authresp = false;
-                s_assoc_status = -1;
-            }
-            break;
-        }
-        }
-    }
-}
-
-// Bring the STA radio + promiscuous capture back up without a reboot. Used by the
-// watchdog as the first, cheap attempt to clear an RX wedge. Errors are ignored
-// deliberately: if the soft path can't recover, the watchdog reboots next tick.
-static void radio_soft_reinit(void) {
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_stop();
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_wifi_set_mac(WIFI_IF_STA, JOIN_SELF_MAC);
-    esp_wifi_start();
-    wifi_promiscuous_filter_t filter = {
-        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA |
-                       WIFI_PROMIS_FILTER_MASK_CTRL,
-    };
-    esp_wifi_set_promiscuous_filter(&filter);
-    esp_wifi_set_promiscuous_rx_cb(promisc_cb);
-    esp_wifi_set_promiscuous(true);
-    esp_wifi_set_channel(CAPTURE_CHANNEL, WIFI_SECOND_CHAN_NONE);
-    esp_wifi_config_80211_tx_rate(WIFI_IF_STA, WIFI_PHY_RATE_1M_L);
-}
-
-// RX-wedge watchdog. The C6 radio wedges (RX stops, s_seen frozen) after a long
-// run of raw-TX auth grinding, and used to need a manual esptool hard reset. An
-// active room always yields Nintendo frames (host beacons ~10/s at minimum), so
-// s_seen not advancing for RX_STALL_SECS means the radio is wedged, not idle.
-// Recovery: soft radio re-init first; if the next window is still frozen, reboot.
-static void watchdog_task(void *arg) {
-    uint32_t last = s_seen;
-    int stall = 0;
-    bool tried_soft = false;
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        if (s_seen != last) { // radio is alive
-            last = s_seen;
-            stall = 0;
-            tried_soft = false;
-            continue;
-        }
-        if (++stall < RX_STALL_SECS)
-            continue; // not yet long enough to call it wedged
-        if (!tried_soft) {
-            ESP_LOGW(TAG, "WATCHDOG: RX wedged (%ds no frames) — soft radio re-init", stall);
-            radio_soft_reinit();
-            tried_soft = true;
-            // Drop back to a clean scan so we re-latch a fresh beacon and rejoin.
-            s_js = JS_SCAN;
-            s_have_beacon = false;
-            s_got_authresp = false;
-            s_assoc_status = -1;
-            stall = 0;
-            last = s_seen;
-        } else {
-            ESP_LOGE(TAG, "WATCHDOG: still wedged after soft re-init — rebooting");
-            esp_restart();
-        }
     }
 }
 #endif
@@ -2154,11 +1444,6 @@ static void wifi_init(void) {
         ap.ap.authmode = WIFI_AUTH_OPEN;
     }
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
-#elif SNIFFER_MODE == MODE_JOIN
-    // Join: STA interface for injection. Take the joiner's MAC so the hardware
-    // auto-ACKs the host's unicast auth/assoc-req at SIFS.
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, JOIN_SELF_MAC));
 #elif SNIFFER_MODE == MODE_HOST
     // Host: real SoftAP so the HARDWARE beacon engine radiates a regular 100 TU beacon
     // with a genuine HW-maintained TSF (the whole point of the pivot). We take our BSSID
@@ -2190,7 +1475,7 @@ static void wifi_init(void) {
     ap.ap.ssid[5] = 0x03; // stream_code high
     ap.ap.ssid_len = 32;
     ap.ap.ssid_hidden = 1; // beacon SSID element stays zero-length
-#if PICTOCHAT_USB || PICTOCHAT_BLE
+#if PICTOCHAT_USB
     ap.ap.channel = online_channel();
 #else
     ap.ap.channel = CAPTURE_CHANNEL;
@@ -2233,17 +1518,13 @@ static void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(promisc_cb));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
 
-#if SNIFFER_MODE == MODE_STREAM || SNIFFER_MODE == MODE_JOIN || SNIFFER_MODE == MODE_HOST ||       \
+#if SNIFFER_MODE == MODE_STREAM || SNIFFER_MODE == MODE_HOST ||       \
     SNIFFER_MODE == MODE_SERIAL_MGMT
-#if PICTOCHAT_USB || PICTOCHAT_BLE
+#if PICTOCHAT_USB
     ESP_ERROR_CHECK(esp_wifi_set_channel(online_channel(), WIFI_SECOND_CHAN_NONE));
-#elif !PICTOCHAT_ONLINE
+#else
     ESP_ERROR_CHECK(esp_wifi_set_channel(CAPTURE_CHANNEL, WIFI_SECOND_CHAN_NONE));
 #endif
-#endif
-#if SNIFFER_MODE == MODE_JOIN
-    // The DS speaks 802.11b at 1-2 Mbps; send our injected frames at 1 Mbps.
-    esp_wifi_config_80211_tx_rate(WIFI_IF_STA, WIFI_PHY_RATE_1M_L);
 #endif
 #if SNIFFER_MODE == MODE_HOST
     // DS radios are 802.11b DSSS only — beacon/frames must be 11b or the DS can't
@@ -2324,15 +1605,6 @@ void app_main(void) {
         SERIAL_TRACE_HOST[0], SERIAL_TRACE_HOST[1], SERIAL_TRACE_HOST[2], SERIAL_TRACE_HOST[3],
         SERIAL_TRACE_HOST[4], SERIAL_TRACE_HOST[5], (unsigned)MP_TRACE_FRAMES);
     xTaskCreate(serial_mgmt_task, "serial_mgmt", 4096, NULL, 5, NULL);
-#elif SNIFFER_MODE == MODE_JOIN
-    ESP_LOGI(TAG,
-             "JOIN mode: active client %02X:%02X:%02X:%02X:%02X:%02X on "
-             "channel %d. Turn the real joiner DS OFF. Latching a beacon, "
-             "then sending Auth-Req -> Assoc-Req to the host.",
-             JOIN_SELF_MAC[0], JOIN_SELF_MAC[1], JOIN_SELF_MAC[2], JOIN_SELF_MAC[3],
-             JOIN_SELF_MAC[4], JOIN_SELF_MAC[5], CAPTURE_CHANNEL);
-    xTaskCreate(join_task, "join", 4096, NULL, 5, NULL);
-    xTaskCreate(watchdog_task, "watchdog", 3072, NULL, 6, NULL);
 #elif SNIFFER_MODE == MODE_HOST
     ESP_LOGI(TAG,
              "HOST mode: hosting a PictoChat room (BSSID "
