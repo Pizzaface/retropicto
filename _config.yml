@@ -1,7 +1,11 @@
 title: RetroPicto
 description: Bring Nintendo DS PictoChat rooms together.
 baseurl: /retropicto
-theme: jekyll-theme-cayman
+nav:
+  - {title: Install, url: /INSTALL.html}
+  - {title: Protocol, url: /PROTOCOL.html}
+  - {title: Firmware, url: /docs/FIRMWARE.html}
+  - {title: Library, url: /docs/LIBRARY.html}
 include: [README.md]
 exclude:
   - AGENTS.md

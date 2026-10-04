@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#101416">
+<title>{% if page.title and page.title != site.title %}{{ page.title }} · {% endif %}{{ site.title }}</title>
+<meta name="description" content="{{ site.description }}">
+<link rel="icon" href="{{ '/assets/favicon.svg' | relative_url }}" type="image/svg+xml">
+<link rel="stylesheet" href="{{ '/assets/style.css' | relative_url }}">
+</head>
+<body>
+<div class="shell">
+  <nav aria-label="Main">
+    <a class="brand" href="{{ '/' | relative_url }}">
+      <svg class="logo" viewBox="0 0 28 28" aria-hidden="true"><path fill-rule="evenodd" d="M4 3h20v3h3v15h-3v3H12v3H6v-6H1V6h3zm0 3v12h5v6l3-3h12V6z"/><path d="M10 10h2v2h-2zm6 0h2v2h-2zm-6 4h2v2h4v-2h2v2h-2v2h-4v-2h-2z"/></svg>
+      <span>RetroPicto</span>
+    </a>
+    {% for link in site.nav %}{% assign href = link.url | relative_url %}
+    <a href="{{ href }}"{% if page.url == link.url %} class="current"{% endif %}>{{ link.title }}</a>{% endfor %}
+    <a href="https://retropic.to">retropic.to</a>
+    <a href="https://github.com/Pizzaface/retropicto">GitHub</a>
+  </nav>
+  <main class="panel doc">
+{{ content }}
+  </main>
+  <footer>
+    <span>RetroPicto · Bring your own stylus.</span>
+    <a href="https://retropic.to/docs/setup/">Setup guide</a>
+    <a href="{{ '/assets/PixelifySans-OFL.txt' | relative_url }}">Pixelify Sans font license</a>
+  </footer>
+</div>
+</body>
+</html>

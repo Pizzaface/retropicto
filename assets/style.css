@@ -1,0 +1,97 @@
+/* Tokens and chrome mirror retro-picto-server/src/style.css. */
+@font-face {
+  font-family: Pixelify Sans;
+  src: url("pixelify-700.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+:root {
+  --shell: oklch(93% 0.009 210);
+  --shell-edge: oklch(79% 0.016 210);
+  --paper: oklch(99% 0.004 100);
+  --surface: oklch(96% 0.007 210);
+  --ink: oklch(27% 0 0);
+  --muted: oklch(46% 0 0);
+  --shell-ink: oklch(27% 0 0);
+  --shell-muted: oklch(40% 0 0);
+  --line: oklch(84% 0.013 220);
+  --accent: oklch(38% 0.035 230);
+  --focus: oklch(52% 0.19 260);
+  --mono: ui-monospace, monospace;
+  --font: ui-rounded, "Trebuchet MS", system-ui, sans-serif;
+  --font-logo: Pixelify Sans, ui-monospace, monospace;
+  --radius: 12px;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; overflow-x: clip; }
+body {
+  min-width: 320px;
+  background: var(--shell);
+  color: var(--ink);
+  font: 15px/1.6 var(--font);
+}
+a:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+.shell { max-width: 1280px; margin: auto; padding: 0 40px; }
+nav {
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--shell-edge);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-right: auto;
+  font: 700 22px var(--font-logo);
+  color: var(--shell-ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.logo { display: block; width: 34px; height: 34px; flex: none; fill: currentColor; }
+nav a { color: var(--shell-ink); text-decoration: none; font-weight: 700; white-space: nowrap; }
+nav a.current { border-bottom: 2px solid var(--shell-ink); padding: 8px 0; }
+.panel {
+  background: var(--paper);
+  border: 1px solid var(--shell-edge);
+  border-radius: var(--radius);
+}
+.doc { max-width: 872px; margin: 40px auto; padding: 40px 48px; overflow-wrap: anywhere; }
+.doc > :first-child { margin-top: 0; }
+.doc h1 { font-size: clamp(2rem, 5vw, 3rem); line-height: 1.05; letter-spacing: -0.04em; margin: 0 0 20px; }
+.doc h2 { font-size: 1.35rem; margin: 2.2em 0 0.6em; padding-top: 1em; border-top: 1px solid var(--line); }
+.doc h3 { font-size: 1.1rem; margin: 1.8em 0 0.5em; }
+.doc a { color: var(--accent); text-underline-offset: 3px; }
+.doc li + li { margin-top: 4px; }
+.doc code { font: 0.9em var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+.doc pre { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; line-height: 1.45; }
+.doc pre code { background: none; border: 0; padding: 0; }
+.doc blockquote { margin: 1em 0; padding: 4px 16px; border-left: 3px solid var(--shell-edge); color: var(--muted); }
+.doc table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 14px; }
+.doc th, .doc td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+.doc th { background: var(--surface); }
+.doc img { max-width: 100%; }
+.doc hr { border: 0; border-top: 1px solid var(--line); }
+footer {
+  max-width: 872px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--shell-edge);
+  padding: 20px 0 32px;
+  color: var(--shell-muted);
+  font-size: 12px;
+}
+footer a { color: inherit; }
+@media (max-width: 720px) {
+  .shell { padding: 0 16px; }
+  nav { gap: 16px; min-height: 80px; }
+  .doc { margin: 24px 0; padding: 24px 20px; }
+}
