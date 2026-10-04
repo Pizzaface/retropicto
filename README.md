@@ -157,13 +157,13 @@ own notices; read their adjacent license files before redistribution.
 
 ## Trademarks and affiliation
 
-Nintendo, Nintendo DS, Nintendo DS Lite, Nintendo DSi, and PictoChat are
-trademarks of Nintendo. RetroPicto is an independent fan project. It is not
-affiliated with, endorsed by, sponsored by, or approved by Nintendo.
-
-PictoChat compatibility comes from independent observation of over-the-air
-traffic between consoles the authors own. This repository contains no Nintendo
-code, firmware, ROMs, BIOS images, encryption keys, or other copyrighted
-Nintendo assets, and RetroPicto does not modify the consoles. Nintendo names
-appear only to describe compatibility. You need your own DS hardware to use
-RetroPicto.
+- **Trademarks.** Nintendo, Nintendo DS, Nintendo DS Lite, Nintendo DSi, and
+  PictoChat are trademarks of Nintendo. They appear here only to describe
+  compatibility.
+- **No affiliation.** RetroPicto is an independent fan project. It is not
+  affiliated with, endorsed by, sponsored by, or approved by Nintendo.
+- **No Nintendo material.** This repository contains no Nintendo code,
+  firmware, ROMs, BIOS images, encryption keys, or other copyrighted assets.
+- **How it works.** Compatibility comes from observing over-the-air traffic
+  between consoles the authors own. RetroPicto does not modify consoles.
+- **Bring your own DS.** You need your own Nintendo DS hardware to use it.

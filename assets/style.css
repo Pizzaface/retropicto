@@ -90,7 +90,7 @@ footer {
   font-size: 12px;
 }
 footer a { color: inherit; }
-footer .legal { flex-basis: 100%; margin: 0; }
+footer .legal { flex-basis: 100%; margin: 4px 0 0; padding-top: 12px; border-top: 1px dashed var(--line); line-height: 1.7; }
 @media (max-width: 720px) {
   .shell { padding: 0 16px; }
   nav { gap: 16px; min-height: 80px; }
