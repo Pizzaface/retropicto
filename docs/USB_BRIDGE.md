@@ -115,11 +115,11 @@ Room mutation happens only in the existing radio-owner task.
 
 ## Bench setup: PC bridge (dev only)
 
-> **Currently broken.** `tools/usb_bridge.py` never sends `@OPEN`, so both
-> Relays keep their DS rooms hidden and no console can join. It also stamps
-> every forwarded frame `from=1`, so with `ONLINE_LOCAL_SLOTS=2` both far-side
-> slots overwrite one remote entry. Both boards also start as room A until
-> `@ROOM B` is sent to one of them. Use the phone path, or fix the script first.
+> **Limited.** `tools/usb_bridge.py` sends `@OPEN` every 3 s, but stamps every
+> forwarded frame `from=1`, so with `ONLINE_LOCAL_SLOTS=2` both far-side slots
+> overwrite one remote entry: use one DS per board. Both boards start as room A
+> until `@ROOM B` is sent to one of them. Not hardware-tested since the `@OPEN`
+> change.
 
 ### Same computer trial
 
