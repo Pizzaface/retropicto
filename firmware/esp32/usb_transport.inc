@@ -119,7 +119,7 @@ static bool usb_line(size_t size, int64_t now) {
             return false;
         usb_wire[i] = (uint8_t)((a << 4) | b);
     }
-    return relay_receive(usb_wire, bytes, 0, now);
+    return relay_receive(usb_wire, bytes, now);
 }
 
 static void usb_task(void *arg) {

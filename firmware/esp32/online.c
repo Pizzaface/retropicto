@@ -1,29 +1,22 @@
 #include "online.h"
 #if PICTOCHAT_ONLINE
+#if !PICTOCHAT_USB
+#error "PICTOCHAT_ONLINE requires the USB transport (PICTOCHAT_USB=1)"
+#endif
 #include <stdatomic.h>
 #include <stdlib.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_event.h"
 #include "esp_wifi.h"
-#include "esp_netif.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_random.h"
 #include "esp_system.h"
-#include "esp_mac.h"
-#include "lwip/sockets.h"
-#if !PICTOCHAT_USB && !PICTOCHAT_BLE
-#include "wifi_credentials.h"
-#endif
 #include "pictochat/relay_wire.h"
 
 // Relay limits and task-owned state. Shared remote state is guarded by lock.
-#define LINK_PORT 26711
 #ifndef ONLINE_LOCAL_SLOTS
 #define ONLINE_LOCAL_SLOTS 1u
 #endif
@@ -70,10 +63,6 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static state_t local_state[LOCAL_SLOTS];
 static remote_t remotes[GHOST_SLOTS]; /* guarded by lock */
 static uint32_t boot_id;
-#if !PICTOCHAT_USB && !PICTOCHAT_BLE
-static atomic_bool have_ip;
-static atomic_uint sta_ip, sta_broadcast;
-#endif
 static atomic_uint channel = 7, ghost_count;
 static uint32_t next_seq = 1;
 static unsigned node;
@@ -89,58 +78,9 @@ unsigned online_channel(void) {
 unsigned online_ghost_count(void) {
     return atomic_load(&ghost_count);
 }
-#if !PICTOCHAT_USB && !PICTOCHAT_BLE
-static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    (void)arg;
-    if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        const ip_event_got_ip_t *e = data;
-        atomic_store(&sta_ip, e->ip_info.ip.addr);
-        atomic_store(&sta_broadcast, e->ip_info.ip.addr | ~e->ip_info.netmask.addr);
-        atomic_store(&have_ip, true);
-        ESP_LOGI(TAG, "Wi-Fi ready: " IPSTR " channel=%u node=%u", IP2STR(&e->ip_info.ip),
-                 online_channel(), online_node());
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
-        const wifi_event_sta_connected_t *e = data;
-        atomic_store(&channel, e->channel);
-        ESP_LOGI(TAG, "Wi-Fi associated; PictoChat uses channel=%u", e->channel);
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_HOME_CHANNEL_CHANGE) {
-        const wifi_event_home_channel_change_t *e = data;
-        atomic_store(&channel, e->new_chan);
-        ESP_LOGI(TAG, "Radio home channel=%u", e->new_chan);
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        const wifi_event_sta_disconnected_t *e = data;
-        atomic_store(&have_ip, false);
-        ESP_LOGW(TAG, "Wi-Fi disconnected reason=%u; retrying", e->reason);
-    }
-}
-
-void online_wifi_configure(void) {
-    static const uint8_t mac_a[6] = ONLINE_NODE_A_MAC, mac_b[6] = ONLINE_NODE_B_MAC;
-    uint8_t actual[6];
-    ESP_ERROR_CHECK(esp_read_mac(actual, ESP_MAC_WIFI_STA));
-    node = !memcmp(actual, mac_a, 6) ? 1 : !memcmp(actual, mac_b, 6) ? 2 : 0;
-    if (!node)
-        ESP_LOGE(TAG, "Board not assigned in wifi.local.json");
-    ESP_ERROR_CHECK(node ? ESP_OK : ESP_ERR_INVALID_STATE);
-    esp_netif_t *sta = esp_netif_create_default_wifi_sta();
-    configASSERT(sta);
-    ESP_ERROR_CHECK(esp_netif_set_default_netif(sta));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    wifi_config_t cfg = {0};
-    cfg.sta.channel = ONLINE_WIFI_CHANNEL; // Initial scan preference; router remains authoritative.
-    memcpy(cfg.sta.ssid, ONLINE_WIFI_SSID, sizeof(ONLINE_WIFI_SSID) - 1);
-    memcpy(cfg.sta.password, ONLINE_WIFI_PASSWORD, sizeof(ONLINE_WIFI_PASSWORD) - 1);
-    cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    cfg.sta.pmf_cfg.capable = true;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
-}
-#else
 #include "nvs.h"
-/* DS room letter A..D (node 1..4). Saved by the bridge over USB ("@ROOM X"); a
- * saved value wins over the build's PICTOCHAT_NODE. Channels are the
- * hardware-confirmed ones per room. */
+/* DS room letter A..D (node 1..4), saved by the bridge over USB ("@ROOM X");
+ * unset defaults to A. Channels are the hardware-confirmed ones per room. */
 static const uint8_t room_channel[4] = {1, 7, 13, 7};
 
 bool online_room_save(unsigned room) {
@@ -161,19 +101,10 @@ void online_wifi_configure(void) {
         nvs_get_u8(h, "room", &saved);
         nvs_close(h);
     }
-    if (saved >= 1 && saved <= 4)
-        node = saved;
-    else {
-#if defined(PICTOCHAT_NODE)
-        node = PICTOCHAT_NODE;
-#else
-        node = 1;
-#endif
-    }
+    node = saved >= 1 && saved <= 4 ? saved : 1;
     atomic_store(&channel, room_channel[node - 1]);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 }
-#endif
 /* At most 15 remotes: a bounded linear scan keeps peer lookup simple. */
 static int remote_index(unsigned id) {
     if (id)
@@ -327,10 +258,8 @@ bool online_tick(pictochat_room_t *room) {
     return changed;
 }
 
-/* Shared by every transport. relay_receive consumes one complete v2 frame;
- * transports without peer ids (LAN/BLE, one peer) pass from_default=1. */
-// Shared relay protocol, independent of the selected transport.
-static bool relay_receive(const uint8_t *wire, size_t bytes, unsigned from_default, int64_t now) {
+// relay_receive consumes one complete v2 frame; frames must carry a sender id.
+static bool relay_receive(const uint8_t *wire, size_t bytes, int64_t now) {
     unsigned kind, from, to;
     uint32_t seq;
     size_t len;
@@ -338,8 +267,6 @@ static bool relay_receive(const uint8_t *wire, size_t bytes, unsigned from_defau
         bytes != RELAY_HEADER + len ||
         relay_hash(wire + RELAY_HEADER, len) != relay_get32(wire + 12))
         return false;
-    if (!from)
-        from = from_default;
     if (!from)
         return false;
     const uint8_t *payload = wire + RELAY_HEADER;
@@ -482,213 +409,7 @@ static void relay_transmit(relay_send_fn send, int64_t now, bool ready) {
         }
     }
 }
-#if !PICTOCHAT_USB && !PICTOCHAT_BLE
-// Direct-LAN transport. BLE and USB implementation fragments are selected below.
-static bool transfer(int fd, void *buf, size_t len, bool sending) {
-    uint8_t *p = buf;
-    while (len) {
-        int n = sending ? send(fd, p, len, 0) : recv(fd, p, len, 0);
-        if (n <= 0)
-            return false;
-        p += n;
-        len -= n;
-    }
-    return true;
-}
-
-static int readable(int fd, unsigned ms) {
-    fd_set set;
-    FD_ZERO(&set);
-    FD_SET(fd, &set);
-    struct timeval timeout = {ms / 1000, (ms % 1000) * 1000};
-    return select(fd + 1, &set, NULL, NULL, &timeout);
-}
-
-static void socket_timeout(int fd) {
-    struct timeval timeout = {3, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-}
-
-static int connect_peer(struct sockaddr_in *address) {
-    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (fd < 0)
-        return -1;
-    fcntl(fd, F_SETFL, O_NONBLOCK);
-    int result = connect(fd, (struct sockaddr *)address, sizeof(*address));
-    if (result < 0 && errno != EINPROGRESS) {
-        close(fd);
-        return -1;
-    }
-    fd_set set;
-    FD_ZERO(&set);
-    FD_SET(fd, &set);
-    struct timeval timeout = {1, 0};
-    int error = 0;
-    socklen_t size = sizeof(error);
-    if (select(fd + 1, NULL, &set, NULL, &timeout) <= 0 ||
-        getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) < 0 || error) {
-        close(fd);
-        return -1;
-    }
-    fcntl(fd, F_SETFL, 0);
-    socket_timeout(fd);
-    return fd;
-}
-
-static int lan_fd = -1;
-
-static bool lan_send(unsigned kind, uint32_t seq, unsigned from, unsigned to, const uint8_t *body,
-                     size_t len) {
-    uint8_t header[RELAY_HEADER];
-    return relay_header(header, kind, seq, from, to, body, len) &&
-           transfer(lan_fd, header, sizeof(header), true) &&
-           (!len || transfer(lan_fd, (void *)body, len, true));
-}
-
-static void network_task(void *arg) {
-    (void)arg;
-    int udp = -1, listener = -1;
-    int64_t last_connect = 0, last_discovery = 0, last_rx = 0, last_status = 0;
-    static uint8_t wire[RELAY_HEADER + RELAY_MAX_PAYLOAD];
-    for (;;) {
-        int64_t now = esp_timer_get_time();
-        if (now - last_status > 10000000) {
-            ESP_LOGI(TAG, "Link status: ip=%u udp=%d listener=%d peer=%d heap=%u",
-                     atomic_load(&have_ip), udp, listener, lan_fd,
-                     (unsigned)esp_get_free_heap_size());
-            last_status = now;
-        }
-        if (!atomic_load(&have_ip)) {
-            if (lan_fd >= 0) {
-                close(lan_fd);
-                lan_fd = -1;
-            }
-            if (udp >= 0) {
-                close(udp);
-                udp = -1;
-            }
-            last_rx = 0;
-            relay_forget_all();
-            relay_transmit(lan_send, now, false);
-            if (now - last_connect > 10000000) {
-                esp_wifi_connect();
-                last_connect = now;
-            }
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-        if (udp < 0) {
-            udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-            if (udp < 0) {
-                vTaskDelay(pdMS_TO_TICKS(100));
-                continue;
-            }
-            int yes = 1;
-            setsockopt(udp, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
-            struct sockaddr_in address = {.sin_family = AF_INET,
-                                          .sin_port = htons(online_node() == 1 ? LINK_PORT : 0),
-                                          .sin_addr.s_addr = atomic_load(&sta_ip)};
-            if (bind(udp, (struct sockaddr *)&address, sizeof(address)) < 0) {
-                close(udp);
-                udp = -1;
-                continue;
-            }
-        }
-        if (online_node() == 1 && listener < 0) {
-            listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-            if (listener < 0) {
-                vTaskDelay(pdMS_TO_TICKS(100));
-                continue;
-            }
-            int yes = 1;
-            setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-            struct sockaddr_in address = {.sin_family = AF_INET,
-                                          .sin_port = htons(LINK_PORT),
-                                          .sin_addr.s_addr = htonl(INADDR_ANY)};
-            if (bind(listener, (struct sockaddr *)&address, sizeof(address)) < 0 ||
-                listen(listener, 1) < 0) {
-                close(listener);
-                listener = -1;
-                vTaskDelay(pdMS_TO_TICKS(100));
-                continue;
-            }
-        }
-        if (online_node() == 2 && lan_fd < 0 && now - last_discovery > 1000000) {
-            struct sockaddr_in address = {.sin_family = AF_INET,
-                                          .sin_port = htons(LINK_PORT),
-                                          .sin_addr.s_addr = atomic_load(&sta_broadcast)};
-            sendto(udp, "PCTR?1", 6, 0, (struct sockaddr *)&address, sizeof(address));
-            last_discovery = now;
-            uint32_t configured = inet_addr(ONLINE_NODE_A_IP);
-            if (configured && configured != INADDR_NONE) {
-                address.sin_addr.s_addr = configured;
-                lan_fd = connect_peer(&address);
-            }
-        }
-        if (readable(udp, 0) > 0) {
-            char message[16];
-            struct sockaddr_in address;
-            socklen_t len = sizeof(address);
-            int n = recvfrom(udp, message, sizeof(message), 0, (struct sockaddr *)&address, &len);
-            if (online_node() == 1 && n == 6 && !memcmp(message, "PCTR?1", 6))
-                sendto(udp, "PCTR!1", 6, 0, (struct sockaddr *)&address, len);
-            else if (online_node() == 2 && lan_fd < 0 && n == 6 && !memcmp(message, "PCTR!1", 6)) {
-                address.sin_port = htons(LINK_PORT);
-                lan_fd = connect_peer(&address);
-            }
-        }
-        if (online_node() == 1 && lan_fd < 0 && listener >= 0 && readable(listener, 0) > 0) {
-            lan_fd = accept(listener, NULL, NULL);
-            if (lan_fd >= 0)
-                socket_timeout(lan_fd);
-        }
-        if (lan_fd < 0) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-        if (!last_rx) {
-            relay_forget_all();
-            relay_transmit(lan_send, now, false);
-            last_rx = now;
-            ESP_LOGI(TAG, "Peer TCP connected node=%u", online_node());
-        }
-        bool ok = now - last_rx < PEER_TIMEOUT_US;
-        if (ok)
-            relay_transmit(lan_send, now, true);
-        if (ok && readable(lan_fd, 20) > 0) {
-            unsigned kind, from, to;
-            uint32_t seq;
-            size_t len;
-            ok = transfer(lan_fd, wire, RELAY_HEADER, false) &&
-                 relay_parse_header(wire, &kind, &seq, &from, &to, &len) &&
-                 (!len || transfer(lan_fd, wire + RELAY_HEADER, len, false));
-            if (ok) {
-                last_rx = esp_timer_get_time();
-                relay_receive(wire, RELAY_HEADER + len, 1, last_rx);
-            }
-        }
-        if (!ok) {
-            close(lan_fd);
-            lan_fd = -1;
-            last_rx = 0;
-            relay_forget_all();
-            ESP_LOGW(TAG, "Peer TCP disconnected; rediscovering");
-        }
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
-}
-#elif PICTOCHAT_BLE
-#include "ble_transport.inc"
-#else
 #include "usb_transport.inc"
-#endif
-#if !PICTOCHAT_USB
-bool online_room_wanted(int64_t now) {
-    (void)now;
-    return true;
-}
-#endif
 void online_start(void) {
     outgoing = xQueueCreate(2, sizeof(drawing_t *));
     incoming = xQueueCreate(1, sizeof(drawing_t *));
@@ -698,21 +419,6 @@ void online_start(void) {
     if (!boot_id)
         boot_id = 1;
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-#if PICTOCHAT_BLE
-    ble_start();
-#elif PICTOCHAT_USB
     usb_start();
-#else
-    if (ONLINE_DIAGNOSTIC_CHANNEL) {
-        ESP_ERROR_CHECK(esp_wifi_set_channel(ONLINE_DIAGNOSTIC_CHANNEL, WIFI_SECOND_CHAN_NONE));
-        atomic_store(&channel, ONLINE_DIAGNOSTIC_CHANNEL);
-        ESP_LOGW(TAG, "Local radio diagnostic: channel=%u; router connection disabled",
-                 online_channel());
-        return;
-    }
-    ESP_ERROR_CHECK(esp_wifi_connect());
-    BaseType_t created = xTaskCreate(network_task, "online", 6144, NULL, 2, NULL);
-    configASSERT(created == pdPASS);
-#endif
 }
 #endif
