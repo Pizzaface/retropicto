@@ -13,9 +13,9 @@ state and frame encoding. PlatformIO builds it with ESP-IDF.
 - `main.c`: radio identities and state, target-specific transmit hooks, the
   promiscuous callback, mode tasks, and startup. Host profile construction and
   periodic status logging are separate helpers so the host loop is easier to scan.
-- `online.c`: local/remote member state, drawing queues, relay scheduling, and LAN
-  transport. `ble_transport.inc` and `usb_transport.inc` are private implementation
-  fragments included by this translation unit; they share its state intentionally.
+- `online.c`: local/remote member state, drawing queues, and relay scheduling.
+  `usb_transport.inc` (USB Serial/JTAG line protocol) is a private fragment included
+  by this translation unit; it shares its state intentionally.
 
 Keep the radio callbacks, ACK ownership, completion waits, attributes, and timing
 constants together when reviewing changes. Moving a helper does not establish that
@@ -26,37 +26,36 @@ radio behavior has been validated on hardware.
 Select a mode by environment; `platformio.ini` supplies `SNIFFER_MODE`. Changing
 the fallback define in `firmware_config.h` does not override that build flag.
 
-| Environment | Board | Behavior | Configured port |
+| Environment | Board | Behavior | Status |
 | --- | --- | --- | --- |
-| `esp32dev` | ESP32-WROOM | fixed-channel PCAP-over-UDP sniffer | automatic |
-| `esp32dev_disc` | ESP32-WROOM | channel-hopping serial discovery | COM6 |
-| `esp32dev_serial` | ESP32-WROOM | fixed-channel serial packet tracing | COM6 |
-| `esp32c6` | ESP32-C6 | experimental joiner/injector | COM12 |
-| `esp32c6host` | ESP32-C6 | experimental four-client room and drawing echo bot | COM12 |
-| `esp32c6online` | ESP32-C6 | direct Wi-Fi bridge | COM12 |
-| `esp32c6usb` | ESP32-C6 | USB bridge | COM12 |
-| `esp32c6ble` | ESP32-C6 | BLE gateway relay | COM12 |
-| `esp32c6ghost` | ESP32-C6 | local GHOST identity and drawing-echo experiment; three physical clients | COM12 |
+| `esp32c6usb` | ESP32-C6 | USB room host for the Android app / MLS relay; default 4 slots → 6 here (2 local DS + 4 remote ghosts) | production |
+| `esp32c6host` | ESP32-C6 | standalone room and drawing echo bot (default 4 clients) | bench |
+| `echo_a`..`echo_d` | ESP32-C6 | echo bot pinned to room A–D | bench |
+| `esp32c6ghost` | ESP32-C6 | local GHOST identity and drawing echo; three physical clients | research |
+| `esp32dev` | ESP32-WROOM | fixed-channel PCAP-over-UDP sniffer | research |
+| `esp32dev_disc` | ESP32-WROOM | channel-hopping serial discovery | research |
+| `esp32dev_serial` | ESP32-WROOM | fixed-channel serial packet tracing | research |
+| `sniffer_b`, `sniffer_d_transfer` | ESP32-WROOM | passive channel-7 witnesses | research |
 
 ```sh
-pio run -e esp32c6host
-pio run -e esp32c6host -t upload --upload-port COM12
-pio device monitor -e esp32c6host --port COM12
+pio run -e esp32c6usb
+pio run -e esp32c6host -t upload --upload-port <port>
+pio device monitor -e esp32c6host --port <port>
 ```
 
 Use the actual serial ports on your machine. Builds do not flash devices.
-Shared Kconfig choices are in `sdkconfig.defaults`; joiner and discovery preserve their
-original 100 Hz tick through `firmware/esp32/sdkconfig.tick100`. Per-environment `sdkconfig.*`
-files and `.pio/` are generated output. The existing 2 MB flash partition setting
-can produce a board-size warning on larger boards; it is unchanged by the library
-extraction.
+Shared Kconfig choices are in `sdkconfig.defaults`; discovery keeps its original
+100 Hz tick through `firmware/esp32/sdkconfig.tick100`. Per-environment `sdkconfig.*`
+files and `.pio/` are generated output. All environments use the pinned pioarduino
+platform in `[env]`. `esp32c6usb` writes a 4 MB flash header into
+`firmware.factory.bin`; it boots on 4 MB and 8 MB modules.
 
 ## Profile and channel
 
 Edit the example `host_profile` and `host_profile_bio` in `main.c`. The Bio is a
 UTF-16 literal with at most 26 code units; library users can set it at runtime with
 `host_profile_set_bio`. Rebuild and rejoin to test a firmware profile change.
-Host/joiner MACs, chat room, capture channel and sniffer AP credentials are example
+Host MACs, chat room, capture channel and sniffer AP credentials are example
 configuration in `main.c` (radio identities) and `firmware_config.h` (mode, room,
 channel and AP defaults), not library defaults.
 
@@ -72,9 +71,8 @@ tool's `--help` for output/interface options.
 ## A–D drawing-echo trials
 
 `echo_a`, `echo_b`, `echo_c`, and `echo_d` run the existing standalone PICTOBOT
-with room IDs 0–3. A uses radio channel 1 and B uses channel 7, the
-hardware-confirmed pairs. A on channel 7 was invisible to the DS (see
-[historical trials](WIFI_BRIDGE.md#superseded-bench-path)). C/channel 13 was
+with room IDs 0–3 on channels A=1, B=7, C=13, D=7 (B and D share channel 7).
+A on channel 7 was invisible to the DS. C/channel 13 was
 hardware-confirmed on September 28: a 10,276-byte drawing echoed correctly and
 Send re-enabled, with a paired passive WROOM capture. D/channel 7 was also
 user-confirmed on September 28: drawing echo displayed and Send re-enabled,
@@ -85,7 +83,7 @@ An intermittent failure remains unresolved: on both B and D, the host reported
 CMD completions while the WROOM saw ACKs but no CMD polls or DS replies. B
 recovered after USB power cycling; D later recovered after reflash without a
 power cycle. Successful room trials do not establish reliable startup or a
-root-cause fix. These targets use the pinned multihop SDK platform.
+root-cause fix.
 
 ```sh
 pio run -e echo_a -t upload --upload-port /dev/cu.usbmodem1101
@@ -100,7 +98,7 @@ or `DRAW outbound TX complete` alone does not prove the echo displayed.
 ### Independent WROOM witness
 
 `sniffer_b` builds the existing passive serial-management sniffer for ESP32-WROOM
-on channel 7, using the pinned SDK. It does not advertise a room. Flash it to the
+on channel 7. It does not advertise a room. Flash it to the
 WROOM's actual port, not the C6's, and start both serial recordings **before**
 joining B so the sniffer sees the association that arms its bounded MP trace.
 
@@ -151,8 +149,8 @@ handshake totals. These counters do not deduplicate or change relay behavior.
 
 ### Experimental duplicate-relay pacing
 
-`echo_d_paced` adds `HOST_PACE_RELAY_REPEATS=1`; ordinary `echo_d` remains the
-control. Once a drawing relay is delivered, byte-identical repeats with the same
+Building `echo_d` with `-D HOST_PACE_RELAY_REPEATS=1` (no checked-in environment)
+enables pacing; plain `echo_d` is the control. Once a drawing relay is delivered, byte-identical repeats with the same
 client WM sequence and association generation are consumed without another relay
 for 100 ms. Radio ACKs are unchanged. New accepted data invalidates the cache;
 failed/no-reply relays and identity handshakes are not suppressed. After 100 ms,
@@ -179,7 +177,8 @@ to check targeted footer masks and reply timing. The scheduler grants one consol
 per cycle, so per-console throughput decreases as the room grows. The radio timing
 constants and cross-client identity replay still require this hardware trial.
 
-The configured capacity is four DS clients plus the host. A full 16-member room
+The default capacity is four DS clients plus the host (`esp32c6usb`: six slots,
+two local DS plus four remote ghosts). A full 16-member room
 means 15 clients plus the host. The installed ESP-IDF native Wi-Fi types cap C6
 SoftAP associations at 10 (11 total room members), while ESP32/S2/S3 allow 15.
 Increasing the room array alone therefore cannot reach 16 on the current C6
@@ -194,17 +193,11 @@ which is ignored. Only intentional regression inputs belong in `tests/fixtures/`
 
 [Drawing evidence](DRAWING_TRANSFER.md), [identity evidence](IDENTITY_EXCHANGE.md),
 and [historical radio notes](RADIO_NOTES.md) document earlier trials. Their removed
-experimental snapshots are not current build inputs. `tools/linux/` is historical
-Linux radio experimentation and is not an implementation of the new library API.
+experimental snapshots are not current build inputs.
 
 Application reactions live in `host_room_event`: receive events copy a drawing
 into the echo queue; sent events update completion counters. Add custom behavior
 there and offload slow work to a worker queue so radio timing stays bounded.
 
-See [ghost users](GHOST_USERS.md) for the local virtual-member trial and proposed online relay.
-
-See [the two-C6 Wi-Fi bridge](WIFI_BRIDGE.md) for the direct-LAN experiment on COM12 and COM5.
-
-For the router-independent USB path, see [USB bridge](USB_BRIDGE.md).
-
-The experimental esp32c6ble environment and PC gateway are described in [BLE_GATEWAY.md](BLE_GATEWAY.md).
+See [ghost users](GHOST_USERS.md) for the local virtual-member trial and
+[USB bridge](USB_BRIDGE.md) for the production transport.
