@@ -218,4 +218,4 @@ retaining partial-write handling. PC bridge tests pass (3 tests). Display delive
 still requires the next physical trial. Diagnostic capture:
 `captures_out/2026-09-24/usb-bridge-193855-211554.log`.
 
-The final USB trial was confirmed by the user in both directions with correct sender attribution. The subsequent BLE/PC/phone experiment is documented in [BLE_GATEWAY.md](BLE_GATEWAY.md).
+The final USB trial was confirmed by the user in both directions with correct sender attribution. The subsequent BLE/PC/phone experiment has been removed from the tree (see git history).
