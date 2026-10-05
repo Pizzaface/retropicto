@@ -24,3 +24,5 @@ compile_commands.json
 /.env.local
 .venv/
 venv/
+.env
+.DS_Store

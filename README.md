@@ -65,6 +65,7 @@ The decoder processes captures; it is not a Python radio or live-host backend.
 | `lib/pictochat/` | Portable C11 session and room engine, frame encoder, public headers |
 | `python/pictochat/` | Capture decoder, drawing helpers, Python command-line tools |
 | `firmware/esp32/` | ESP-IDF adapter, USB transport, sdkconfig fragments |
+| `examples/` | `ai_chat.py`: join a Relay's room as an AI that answers drawings |
 | `tools/` | Serial capture, USB bench bridge, analysis, release packaging |
 | `tests/fixtures/` | Shared protocol regression captures and expected message bytes |
 | `docs/` | API, setup, transport and protocol notes |

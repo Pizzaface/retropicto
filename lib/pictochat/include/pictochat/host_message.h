@@ -5,6 +5,9 @@
 #define HOST_MESSAGE_MAX 10276u
 #define HOST_MESSAGE_CHUNK 160u
 #define HOST_MESSAGE_COPIES 3u
+// A DS displays only bitmap columns 24..251; the name tag covers about x<112, y<16.
+#define HOST_MESSAGE_VISIBLE_LEFT 24u
+#define HOST_MESSAGE_VISIBLE_WIDTH 228u
 
 typedef struct {
     bool active, invalid, final_seen, complete;

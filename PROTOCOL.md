@@ -65,6 +65,9 @@ missing fragments from unrelated messages. `--inpaint` is now an obsolete no-op.
 - Bitmap height follows the announced transfer length after removing 36 bytes
   of metadata; observed complete examples include 16 and 64 pixels. The maximum
   supported bitmap is 256x80 (10,240 bitmap bytes).
+- Only columns 24..251 (228 px) are visible on the DS; the sender's name tag
+  covers roughly x<112, y<16. Content outside that box is transmitted but not
+  shown (`canvas.VISIBLE_LEFT`/`VISIBLE_WIDTH`, `HOST_MESSAGE_VISIBLE_*`).
 - The corrected `send.pcap` reconstruction renders "12345" without artificial
   gaps. Run `python tools/render_canvas.py tests/fixtures/send.pcap -o captures_out`.
 - The ESP32-C6 host receives and transmits complete message transfers with

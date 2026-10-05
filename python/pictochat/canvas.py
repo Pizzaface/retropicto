@@ -12,6 +12,9 @@ TILES_WIDE = 32
 TILE_BYTES = 32
 WIDTH = TILES_WIDE * 8
 MAX_BITMAP = 10240
+# A DS shows only x VISIBLE_LEFT..VISIBLE_LEFT+VISIBLE_WIDTH-1 of each row; the sender's
+# name tag covers roughly x<112, y<16. Observed on hardware by the retropic.to inbox.
+VISIBLE_LEFT, VISIBLE_WIDTH = 24, 228
 PALETTE = tuple(bytes.fromhex(h) for h in (
     'ffffff', '000000', 'ffffff', 'e060d0', 'f050a0', 'f02040', 'f07020', 'f0a020',
     'f0e020', 'a0e020', '30c030', '20e0c0', '20c0f0', '2090f0', '3060e0', '5050d0'))
