@@ -100,7 +100,7 @@ The formatter excludes third-party code. Run the
 native C tests after editing, and build the relevant PlatformIO environments before
 hardware validation. Formatting or a native test pass is not a radio smoke test.
 
-No source license is declared yet. Third-party firmware notices are in
+Released under the [MIT License](LICENSE). Third-party firmware notices are in
 [`docs/third-party/`](docs/third-party/README.md).
 
 ## Trademarks and affiliation

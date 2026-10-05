@@ -9,6 +9,7 @@ description = "RetroPicto portable Nintendo DS PictoChat protocol and capture to
 readme = "README.md"
 urls = { Homepage = "https://retropic.to" }
 requires-python = ">=3.10"
+license = { text = "MIT" }
 
 [project.scripts]
 pictochat-analyze = "pictochat.cli.analyze:main"
